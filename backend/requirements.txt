@@ -1,0 +1,13 @@
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+google-cloud-bigquery==3.27.0
+google-cloud-storage==2.19.0
+google-auth==2.36.0
+bcrypt==4.2.1
+python-jose[cryptography]==3.3.0
+pydantic-settings==2.6.1
+python-multipart==0.0.18
+slowapi==0.1.9
+firebase-admin==6.6.0
+httpx==0.28.1
+fpdf2==2.8.2

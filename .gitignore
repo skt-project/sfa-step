@@ -1,0 +1,13 @@
+.DS_Store
+Thumbs.db
+*.log
+.env
+*.zip
+Template Invoicing.JPG
+backend/__pycache__/
+backend/**/__pycache__/
+*.pyc
+*.pyo
+bq-*.json
+*-credentials.json
+*-key.json
