@@ -11,14 +11,17 @@ from services.auth import decode_token
 
 _bearer = HTTPBearer()
 
-# Business group → brand mapping.
-# Group A (SKT): Skintific, Timephoria, Facerinna
-# Group B (G2G): G2G, Bodibreze, Nextprime
+# Business Unit → brand mapping. Brand values in gt_schema.master_product are
+# UPPERCASE — comparisons against these lists must uppercase both sides.
+# (Title-case lists previously caused empty product lists and checkout 403s
+# for brand-scoped salesmen.)
+# BU 1 (SKT): SKINTIFIC, TIMEPHORIA, FACERINNA
+# BU 2 (G2G): G2G (Glad2Glow), BODIBREZE, NEXTPRIME
 # DEMO: unrestricted — sees all brands and all salesmen (for demo/testing accounts)
 BRAND_GROUPS: dict[str, list[str]] = {
-    "SKT": ["Skintific", "Timephoria", "Facerinna"],
-    "G2G": ["G2G", "Bodibreze", "Nextprime"],
-    "DEMO": ["Skintific", "Timephoria", "Facerinna", "G2G", "Bodibreze", "Nextprime"],
+    "SKT": ["SKINTIFIC", "TIMEPHORIA", "FACERINNA"],
+    "G2G": ["G2G", "BODIBREZE", "NEXTPRIME"],
+    "DEMO": ["SKINTIFIC", "TIMEPHORIA", "FACERINNA", "G2G", "BODIBREZE", "NEXTPRIME"],
 }
 
 # brand_groups that bypass all SQL row-level filters (see all routes, all salesmen)
@@ -95,4 +98,54 @@ def brand_list_filter(
         return "AND 1=0", []
     placeholders = ", ".join(f"@{param_prefix}_{i}" for i in range(len(brands)))
     params = [BQClient.p(f"{param_prefix}_{i}", "STRING", b) for i, b in enumerate(brands)]
-    return f"AND {col} IN ({placeholders})", params
+    # UPPER() on the column: brand casing differs between tables
+    # (master_product is UPPERCASE, older tables may be Title-case).
+    return f"AND UPPER({col}) IN ({placeholders})", params
+
+
+def spv_salesman_filter(
+    user: UserContext,
+    salesman_col: str = "salesman_sk",
+    param_name: str = "spv_own",
+) -> tuple[str, list]:
+    """
+    One-Line-Management: restrict rows to salesmen assigned to this SPV
+    (dim_salesman.spv_name matches the SPV user's full_name/username).
+
+    Only applies to role 'spv'. If the SPV has NO mapped salesmen in
+    dim_salesman, no filter is added (graceful fallback to brand-group
+    scoping) so unmapped/test SPV accounts keep working.
+    """
+    from services.bq import BQClient
+    from config import settings
+
+    if user.role != "spv":
+        return "", []
+
+    bq = BQClient.get()
+    # Resolve the SPV's display name once (users.full_name), cached 5 min.
+    cache_key = f"spvmap:{user.user_id}"
+    has_team = bq.cache.get(cache_key)
+    if has_team is None:
+        row = bq.query_one(
+            f"SELECT full_name FROM {settings.table('users')} WHERE user_id = @uid",
+            [bq.p("uid", "STRING", user.user_id)],
+        )
+        spv_name = (row or {}).get("full_name") or user.username
+        n = bq.query_one(
+            f"SELECT COUNT(*) AS n FROM {settings.table('dim_salesman')} "
+            "WHERE UPPER(spv_name) = UPPER(@nm) AND is_active = TRUE",
+            [bq.p("nm", "STRING", spv_name)],
+        )
+        has_team = {"name": spv_name, "count": int((n or {}).get("n", 0))}
+        bq.cache.set(cache_key, has_team, ttl=300)
+
+    if has_team["count"] == 0:
+        return "", []  # unmapped SPV — fall back to brand-group scoping only
+
+    clause = (
+        f"AND {salesman_col} IN ("
+        f"SELECT salesman_sk FROM {settings.table('dim_salesman')} "
+        f"WHERE UPPER(spv_name) = UPPER(@{param_name}) AND is_active = TRUE)"
+    )
+    return clause, [BQClient.p(param_name, "STRING", has_team["name"])]

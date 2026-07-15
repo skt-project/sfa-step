@@ -23,7 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from config import settings
-from dependencies import BRAND_GROUPS, brand_group_filter, require_auth, _UNRESTRICTED_GROUPS
+from dependencies import BRAND_GROUPS, brand_group_filter, require_auth, spv_salesman_filter, _UNRESTRICTED_GROUPS
 from models.auth import UserContext
 from models.visit import (
     ApproveRequest, CheckinRequest, CheckinResponse,
@@ -95,6 +95,23 @@ _VISIT_COLS = """
     v.rejection_notes, v.revision_count,
     v.created_at, v.updated_at
 """
+
+
+def _assert_spv_owns_visit(bq: "BQClient", user: UserContext, visit_salesman_sk: str | None) -> None:
+    """One-Line-Management: an SPV with a mapped team may only act on visits
+    from their own salesmen. Unmapped SPVs (no dim_salesman rows) are exempt."""
+    if user.role != "spv" or not visit_salesman_sk:
+        return
+    clause, params = spv_salesman_filter(user, salesman_col="salesman_sk")
+    if not clause:
+        return  # unmapped SPV — fallback scoping applies
+    owned = bq.query_one(
+        f"SELECT 1 AS ok FROM {settings.table('dim_salesman')} "
+        "WHERE salesman_sk = @vsk AND UPPER(spv_name) = UPPER(@spv_own) AND is_active = TRUE",
+        [bq.p("vsk", "STRING", visit_salesman_sk), params[0]],
+    )
+    if not owned:
+        raise HTTPException(status_code=403, detail="Kunjungan ini milik salesman SPV lain")
 
 
 def _next_approval_status(current: str, role: str) -> str:
@@ -251,7 +268,7 @@ def checkout(
     if current_user.brand_group and current_user.role != "ho_admin":
         allowed = set(BRAND_GROUPS.get(current_user.brand_group, []))
         for item in body.items:
-            if item.qty > 0 and item.brand and item.brand not in allowed:
+            if item.qty > 0 and item.brand and item.brand.upper() not in allowed:
                 raise HTTPException(
                     status_code=403,
                     detail=f"Brand '{item.brand}' tidak diizinkan untuk group Anda",
@@ -312,7 +329,7 @@ def submit_visit(
     if current_user.brand_group and current_user.role != "ho_admin":
         allowed = set(BRAND_GROUPS.get(current_user.brand_group, []))
         for item in body.items:
-            if item.qty > 0 and item.brand and item.brand not in allowed:
+            if item.qty > 0 and item.brand and item.brand.upper() not in allowed:
                 raise HTTPException(
                     status_code=403,
                     detail=f"Brand '{item.brand}' tidak diizinkan untuk group Anda",
@@ -428,6 +445,8 @@ def approve_visit(
     if not visit:
         raise HTTPException(status_code=404, detail="Visit not found")
 
+    _assert_spv_owns_visit(bq, current_user, visit.get("salesman_sk"))
+
     new_status = _next_approval_status(visit["approval_status"], effective_role)
 
     role_col_map = {
@@ -502,6 +521,8 @@ def reject_visit(
     )
     if not visit:
         raise HTTPException(status_code=404, detail="Visit not found")
+
+    _assert_spv_owns_visit(bq, current_user, visit.get("salesman_sk"))
 
     rev_count = (visit.get("revision_count") or 0) + 1
 
@@ -628,7 +649,7 @@ def list_visits(
 
     # Role scoping
     role = current_user.role
-    if role == "salesman":
+    if role in ("salesman", "se"):
         visit_conditions.append("AND v.salesman_sk = @self_sk")
         params.append(bq.p("self_sk", "STRING", current_user.salesman_sk or current_user.user_id))
     elif role == "dm":
@@ -638,6 +659,17 @@ def list_visits(
             params.append(bq.p("dist_code", "STRING", current_user.distributor_code))
         # DM sees visits that need their action or are already completed
         visit_conditions.append("AND v.approval_status IN ('SPV_APPROVED','COMPLETED')")
+    elif role == "spv":
+        # One-Line-Management: SPV sees only visits from salesmen assigned to
+        # them in dim_salesman (spv_name match). Unmapped SPVs fall back to
+        # brand-group scoping only (clause is empty).
+        spv_clause, spv_params = spv_salesman_filter(current_user, salesman_col="v.salesman_sk")
+        if spv_clause:
+            visit_conditions.append(spv_clause)
+            params.extend(spv_params)
+        if salesman_sk:
+            visit_conditions.append("AND v.salesman_sk = @sm_sk")
+            params.append(bq.p("sm_sk", "STRING", salesman_sk))
     elif salesman_sk:
         visit_conditions.append("AND v.salesman_sk = @sm_sk")
         params.append(bq.p("sm_sk", "STRING", salesman_sk))
@@ -1034,7 +1066,7 @@ def download_pdf(
         _info_row(18,  r + 7, "Salesman",     _safe(visit_out.salesman_name or visit_out.salesman_sk, 28))
         _info_row(103, r + 7, "Distributor",  _safe(visit_out.distributor_code, 28))
         _info_row(18,  r + 14,"Efektif Call", "YA" if visit_out.effective_call == "YES" else "TIDAK")
-        _info_row(103, r + 14,"Grup Brand",   _safe(visit_out.brand_group, 20))
+        _info_row(103, r + 14,"Business Unit",_safe(visit_out.brand_group, 20))
         _info_row(18,  r + 21,"Durasi",       f"{visit_out.duration_minutes} menit" if visit_out.duration_minutes else "-")
         _info_row(103, r + 21,"No. Revisi",   str(visit_out.revision_count or 0))
 
@@ -1108,7 +1140,10 @@ def download_pdf(
                 pdf.set_fill_color(*C_WHITE)
 
             pdf.cell(cw[0], 6, str(idx), fill=True, align="C", border="B")
-            name = _safe(item.sku_name or item.sku_id, 40)
+            name_raw = item.sku_name or item.sku_id
+            if item.sku_size:
+                name_raw = f"{name_raw} ({item.sku_size})"
+            name = _safe(name_raw, 40)
             pdf.cell(cw[1], 6, name, fill=True, border="B")
             pdf.cell(cw[2], 6, _safe(item.brand or "-", 14), fill=True, border="B")
 
@@ -1356,7 +1391,7 @@ def _get_visit_detail(visit_id: str, bq: BQClient) -> VisitOut:
           QUALIFY ROW_NUMBER() OVER (PARTITION BY distributor_code, product_id ORDER BY date DESC) = 1
         )
         SELECT vi.visit_item_id, vi.sku_id, vi.sku_name, vi.brand, vi.category,
-               NULL AS sku_size,
+               mp.pack_size AS sku_size,
                vi.stp, vi.qty, vi.final_qty, vi.demand,
                vi.price_for_store,
                s.current_stock_qty AS warehouse_stock_qty
@@ -1369,6 +1404,7 @@ def _get_visit_detail(visit_id: str, bq: BQClient) -> VisitOut:
             ELSE d.dst_skt
           END
           AND s.product_id = vi.sku_id
+        LEFT JOIN `{P}.gt_schema.master_product` mp ON mp.sku = vi.sku_id
         WHERE vi.visit_id = @vid
         ORDER BY vi.sku_name
         """,

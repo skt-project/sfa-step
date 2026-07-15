@@ -479,7 +479,7 @@ export default function VisitDetail() {
                   </div>
                   {visit.brand_group && (
                     <div>
-                      <dt className="text-slate-400 text-xs mb-0.5">Grup Bisnis</dt>
+                      <dt className="text-slate-400 text-xs mb-0.5">Business Unit</dt>
                       <dd><span className="badge-blue">{visit.brand_group}</span></dd>
                     </div>
                   )}
@@ -607,7 +607,7 @@ export default function VisitDetail() {
                               }`}
                             >
                               <td className="font-mono text-xs text-slate-500">{item.sku_id}</td>
-                              <td className="font-medium text-slate-800">{item.sku_name ?? "—"}</td>
+                              <td className="font-medium text-slate-800">{item.sku_name ?? "—"}{item.sku_size && <span className="text-xs text-slate-400 font-normal"> · {item.sku_size}</span>}</td>
                               <td className="text-slate-500">{item.brand ?? "—"}</td>
                               <td className="text-right font-semibold text-slate-600 tabular-nums">{item.qty ?? 0}</td>
 

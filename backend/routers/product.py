@@ -18,11 +18,13 @@ from services.bq import BQClient
 
 router = APIRouter(prefix="/product", tags=["product"])
 
-# Reverse-map brand → brand_group for response enrichment.
+# Reverse-map brand → business unit (brand_group) for response enrichment.
 # brand_group is not stored in master_product — it is derived here.
+# Keys are uppercase; look up with .upper() (master_product brands are UPPERCASE).
 _BRAND_TO_GROUP: dict[str, str] = {
-    brand: grp
+    brand.upper(): grp
     for grp, brands in BRAND_GROUPS.items()
+    if grp != "DEMO"
     for brand in brands
 }
 
@@ -54,9 +56,10 @@ def list_products(current_user: UserContext = Depends(require_auth)):
             product_name                        AS sku_name,
             brand,
             category,
+            pack_size,
             COALESCE(price_for_store, srp, 0)  AS stp
         FROM {_GT_TABLE}
-        WHERE 1=1 {bg_clause}
+        WHERE COALESCE(price_for_store, srp, 0) > 0 {bg_clause}
         ORDER BY brand, product_name
         """,
         bg_params,
@@ -65,7 +68,7 @@ def list_products(current_user: UserContext = Depends(require_auth)):
     items = []
     for r in rows:
         d = dict(r)
-        d["brand_group"] = _BRAND_TO_GROUP.get(d.get("brand") or "", None)
+        d["brand_group"] = _BRAND_TO_GROUP.get((d.get("brand") or "").upper(), None)
         d["is_active"] = True
         items.append(d)
 

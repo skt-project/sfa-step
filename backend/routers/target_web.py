@@ -148,9 +148,10 @@ def bulk_upsert(
     # Validate every row's brand belongs to the caller's business group.
     if current_user.brand_group:
         from dependencies import BRAND_GROUPS
+        # Case-insensitive: stored brands are mixed-case, BRAND_GROUPS is UPPERCASE
         allowed_brands = set(BRAND_GROUPS.get(current_user.brand_group, []))
         for row in body.rows:
-            if allowed_brands and row.brand not in allowed_brands:
+            if allowed_brands and (row.brand or "").upper() not in allowed_brands:
                 raise HTTPException(
                     status_code=403,
                     detail=f"Brand '{row.brand}' is not accessible for your business group.",

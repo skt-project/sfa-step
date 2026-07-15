@@ -11,6 +11,6 @@
 --
 -- Physical table is step_visit (logical alias fact_visit → step_visit).
 
-ALTER TABLE `skintific-data-warehouse.sfa_web.step_visit`
-  ADD COLUMN IF NOT EXISTS adjustment_amount FLOAT64,
-  ADD COLUMN IF NOT EXISTS adjustment_note   STRING;
+--ALTER TABLE `skintific-data-warehouse.sfa_web.step_visit`
+--  ADD COLUMN IF NOT EXISTS adjustment_amount FLOAT64,
+--  ADD COLUMN IF NOT EXISTS adjustment_note   STRING;

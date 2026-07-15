@@ -240,7 +240,7 @@ export default function MasterDataSalesman() {
                   [
                     ["ID Salesman", selected.source_salesman_code],
                     ["Tipe",        selected.salesman_type],
-                    ["Grup Bisnis", selected.brand_group ?? "—"],
+                    ["Business Unit", selected.brand_group ?? "—"],
                     ["Distributor", selected.distributor_code ?? "—"],
                     ["Region",      selected.region ?? "—"],
                     ["SPV",         selected.spv_name ?? "—"],
