@@ -14,7 +14,10 @@ $SERVICE   = "step-api"
 $IMAGE     = "gcr.io/$PROJECT/$SERVICE"
 
 Write-Host "=== Building Docker image ===" -ForegroundColor Cyan
-docker build -t "$IMAGE`:latest" "D:\GitHub\skintific-step\backend"
+# Build from THIS script's own directory (the sfa-step backend). Never hard-code a
+# repo path here: skintific-step is the DEPRECATED tree (see docs/current/01) and
+# building from it silently ships stale code to production.
+docker build -t "$IMAGE`:latest" $PSScriptRoot
 
 if ($LASTEXITCODE -ne 0) { Write-Error "Docker build failed"; exit 1 }
 

@@ -25,7 +25,7 @@ limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
 app = FastAPI(
     title="STEP API",
     description="Skintific Territory & Execution Platform backend",
-    version="1.4.0",
+    version=settings.app_version,
     docs_url="/docs",
     redoc_url=None,
 )
@@ -78,4 +78,4 @@ app.include_router(import_export.router,   prefix="/api/v1")
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": "1.4.0"}
+    return {"status": "ok", "version": settings.app_version}

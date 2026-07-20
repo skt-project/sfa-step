@@ -1,7 +1,9 @@
 # Skintific Territory & Execution Platform (STEP)
 **Plan. Execute. Monitor.**
 
-Internal enterprise web application for territory planning, route execution, target governance, and sales performance monitoring — upstream of the SFA handheld apps. This repo contains the full design/architecture deliverable set plus a clickable high-fidelity prototype.
+Internal enterprise field-sales execution platform for territory planning, route execution, target governance, and sales performance monitoring. This repo holds the **production web app + backend API** (deployed) alongside the original design deliverables and a clickable prototype.
+
+> **📌 Source of truth:** For how the system actually works today, read [`docs/current/`](docs/current/00-INDEX.md) (as-built). The numbered `docs/01…10` files are the original *design-phase* documents — kept for intent/history, but where they differ, **the as-built docs win**. The mobile app lives in a separate repo, [`sfa-mobile`](https://github.com/skt-project/sfa-mobile).
 
 ## Contents
 
@@ -48,6 +50,14 @@ Use the **role switcher** in the top bar to demo the same data from all 5 roles 
 | `import-export.html` | Import & Export Center |
 | `administration.html` | Administration (Head Office Admin) |
 
+### Implementation
+
+| Path | Stack | Deploys to |
+|---|---|---|
+| [`backend/`](backend/) | FastAPI (Python 3.13), python-jose JWT, bcrypt, slowapi, google-cloud-bigquery | Google Cloud Run (`step-api`), manual via [`backend/deploy_to_cloudrun.ps1`](backend/deploy_to_cloudrun.ps1) |
+| [`frontend/`](frontend/) | Vite 6 + React 18 + TypeScript + Tailwind | Vercel (`sfa-step.vercel.app`), auto on push to `main` |
+| [`database/`](database/) | BigQuery DDL + migrations (`sfa_web` dataset is writable; source datasets are read-only) | — |
+
 ## Status
 
-Design/architecture phase — clickable prototype + full doc suite for stakeholder review, scoped to Phase 1 MVP (see [10-roadmap-and-backlog.md](docs/10-roadmap-and-backlog.md)). Not yet implemented as a production application.
+**In production**, current release **v1.4.2** (see [docs/current/07-changelog.md](docs/current/07-changelog.md)). Actively maintained. The design docs below reflect original Phase-1 intent; the deployed system has since evolved — always reconcile against [`docs/current/`](docs/current/00-INDEX.md).

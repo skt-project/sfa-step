@@ -1,13 +1,16 @@
 """Reset test_se password and create a simple 'se1' account for easy mobile testing."""
+from ops_guard import confirm_destructive
 from services.bq import BQClient
 from services.auth import hash_password
 from config import settings
 import uuid
 from datetime import datetime, timezone
 
-bq = BQClient.get()
 p = settings.bq_project
 d = settings.bq_dataset
+confirm_destructive("UPDATE/INSERT users (reset test_se + se1 credentials)", f"{p}.{d}")
+
+bq = BQClient.get()
 now = datetime.now(timezone.utc).isoformat()
 pw = hash_password("STEP@2026")
 
