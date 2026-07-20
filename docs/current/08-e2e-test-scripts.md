@@ -8,7 +8,7 @@
 
 ## Test accounts
 
-> These must exist in `sfa_web.users`. The repo seeds them via `backend/create_test_users.py` / `create_bulk_users.py` (default password **`STEP@2026`** — change before production). Confirm/adjust with the data team; fill real usernames in the blanks before running.
+> These must exist in `sfa_web.users`. The repo seeds them from `backend/` via `python -m scripts.seed.create_test_users` / `python -m scripts.seed.create_bulk_users` (default password **`STEP@2026`** — change before production). Confirm/adjust with the data team; fill real usernames in the blanks before running.
 
 | Role | Purpose | Username | Password |
 |---|---|---|---|

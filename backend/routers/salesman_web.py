@@ -15,7 +15,7 @@ from services.bq import BQClient
 router = APIRouter(prefix="/salesman", tags=["salesman"])
 
 # sfa_web.dim_salesman is the correct table: it has the brand_group column
-# (added by migrate_brand_group.py).  sfa_step.dim_salesman does NOT have
+# (added by scripts/migrations/migrate_brand_group.py).  sfa_step.dim_salesman does NOT have
 # brand_group, so brand_group_filter() would fail silently against that table.
 SFA_WEB = f"`{settings.bq_project}.{settings.bq_dataset}`"
 
