@@ -3,11 +3,17 @@ One-time cleanup: remove duplicate announcement + approval_request rows
 caused by seed_demo_data.py running twice. Keeps the latest by created_at.
 Also removes duplicate admin user.
 """
+from ops_guard import confirm_destructive
 from services.bq import BQClient
 
-bq = BQClient.get()
 p = "skintific-data-warehouse"
 d = "sfa_web"
+confirm_destructive(
+    "DELETE duplicate rows from announcement, approval_request, and users",
+    f"{p}.{d}",
+)
+
+bq = BQClient.get()
 
 ops = [
     # Keep only the latest 3 announcements (newest by created_at)

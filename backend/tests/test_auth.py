@@ -1,9 +1,15 @@
 """Tests for /auth endpoints."""
+import os
+
 import pytest
+
+# Read from env so these keep passing after the seeded defaults are rotated.
+_TEST_PASSWORD = os.environ.get("STEP_TEST_PASSWORD", "STEP@2026")
+_ADMIN_PASSWORD = os.environ.get("STEP_ADMIN_PASSWORD", "Step@2026!")
 
 
 def test_login_admin_ok(client):
-    r = client.post("/api/v1/auth/login", json={"username": "admin", "password": "Step@2026!"})
+    r = client.post("/api/v1/auth/login", json={"username": "admin", "password": _ADMIN_PASSWORD})
     assert r.status_code == 200
     data = r.json()
     assert "access_token" in data
@@ -11,7 +17,7 @@ def test_login_admin_ok(client):
 
 
 def test_login_se_ok(client):
-    r = client.post("/api/v1/auth/login", json={"username": "demo", "password": "STEP@2026"})
+    r = client.post("/api/v1/auth/login", json={"username": "demo", "password": _TEST_PASSWORD})
     assert r.status_code == 200
     assert r.json()["user"]["role"] == "se"
 

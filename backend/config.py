@@ -4,6 +4,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
+    # Single source of truth for the API version (mirrors docs/current/07-changelog).
+    app_version: str = "1.4.2"
+
     bq_project: str = "skintific-data-warehouse"
     bq_dataset: str = "sfa_web"
     bq_sa_key_path: str = ""      # local dev: path to JSON key file

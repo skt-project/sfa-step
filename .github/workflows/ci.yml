@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  frontend:
+    name: Frontend (build + test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - name: Typecheck + build
+        run: npm run build
+      - name: Unit tests
+        run: npm test
+
+  backend:
+    name: Backend (compile + import smoke)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install --no-cache-dir -r requirements.txt
+      - name: Byte-compile all sources (app + scripts)
+        run: python -m compileall -q .
+      - name: App assembles without BigQuery
+        env:
+          JWT_SECRET: ci-dummy-secret
+        run: python -c "import main; assert main.app.title == 'STEP API'; print('import OK', main.settings.app_version)"
+      # NOTE: the pytest suite in backend/tests is an INTEGRATION suite — it boots
+      # the app against live BigQuery and logs in with real seeded accounts. Run it
+      # in an environment with BQ credentials (BQ_SA_KEY_JSON) + the STEP_TEST_PASSWORD
+      # / STEP_ADMIN_PASSWORD secrets; it is intentionally not run here against prod.

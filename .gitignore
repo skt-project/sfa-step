@@ -11,3 +11,4 @@ backend/**/__pycache__/
 bq-*.json
 *-credentials.json
 *-key.json
+rotated-credentials.local.txt

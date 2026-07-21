@@ -25,7 +25,7 @@ limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
 app = FastAPI(
     title="STEP API",
     description="Skintific Territory & Execution Platform backend",
-    version="1.4.0",
+    version=settings.app_version,
     docs_url="/docs",
     redoc_url=None,
 )
@@ -38,8 +38,12 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    # Explicit allow-lists instead of "*". This API is REST + JWT bearer; the web
+    # and mobile clients only ever send these methods/headers. If a new client needs
+    # another one, add it here. NOTE: verify a browser preflight smoke against the
+    # Vercel origin in staging before the next (manual) backend deploy.
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With"],
 )
 
 # Mobile app routers
@@ -78,4 +82,4 @@ app.include_router(import_export.router,   prefix="/api/v1")
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": "1.4.0"}
+    return {"status": "ok", "version": settings.app_version}

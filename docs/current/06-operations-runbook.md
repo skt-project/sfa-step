@@ -29,7 +29,7 @@
 | `test_dist` | `STEP@2026` | dm* | *pending role normalization from `distributor_admin` |
 | `admin` | `Step@2026!` | ho_admin | sees everything; final approvals |
 
-⚠ Rotate these before real go-live; they are seeded with a known default password (`backend/create_test_users.py`).
+⚠ Rotate these before real go-live; they are seeded with a known default password (`cd backend && python -m scripts.seed.create_test_users`).
 
 ## Monitoring
 - **Cloud Run**: 5xx rate, p95 latency (alert > 3 s), instance count; Cloud Logging for stack traces.
