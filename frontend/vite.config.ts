@@ -1,10 +1,12 @@
-import { defineConfig } from "vite";
+/// <reference types="vitest/config" />
+import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
+import { fileURLToPath } from "node:url";
 
 export default defineConfig({
   plugins: [react()],
   resolve: {
-    alias: { "@": "/src" },
+    alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
   },
   build: {
     rollupOptions: {
@@ -37,5 +39,13 @@ export default defineConfig({
         },
       },
     },
+  },
+  test: {
+    environment: "jsdom",
+    environmentOptions: { jsdom: { url: "http://localhost/" } },
+    globals: true,
+    restoreMocks: true,
+    setupFiles: ["./src/test/setup.ts"],
+    include: ["src/**/*.test.{ts,tsx}"],
   },
 });
