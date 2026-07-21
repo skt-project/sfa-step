@@ -38,8 +38,12 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    # Explicit allow-lists instead of "*". This API is REST + JWT bearer; the web
+    # and mobile clients only ever send these methods/headers. If a new client needs
+    # another one, add it here. NOTE: verify a browser preflight smoke against the
+    # Vercel origin in staging before the next (manual) backend deploy.
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With"],
 )
 
 # Mobile app routers
