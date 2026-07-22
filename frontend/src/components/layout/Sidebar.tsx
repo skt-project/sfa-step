@@ -3,6 +3,7 @@ import { NavLink, Link, useNavigate, useLocation } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@/store/authStore";
 import { Icon } from "@/components/ui";
+import { StepLogo } from "@/components/brand/StepLogo";
 import type { Notification, Role } from "@/types";
 import { fetchNotifications } from "@/api/notifications";
 import { NAV_TREE, isGroup, canSee, groupIsActive } from "./nav";
@@ -58,13 +59,16 @@ export default function Sidebar() {
     <aside className="w-60 min-h-screen bg-slate-900 flex flex-col shrink-0">
       {/* ── Brand ── */}
       <div className="px-5 py-5 border-b border-white/10 shrink-0">
-        <Link to="/dashboard" className="flex items-center gap-3 rounded-lg hover:opacity-80 transition-opacity -m-1 p-1">
-          <div className="w-8 h-8 rounded-lg bg-primary-600 flex items-center justify-center shrink-0">
-            <Icon name="map" className="w-4 h-4 text-white" />
-          </div>
-          <div>
-            <p className="text-white font-bold text-sm leading-tight tracking-wide">STEP</p>
-            <p className="text-slate-500 text-xs mt-0.5">Territory &amp; Execution</p>
+        <Link
+          to="/dashboard"
+          aria-label="STEP — Beranda"
+          className="flex items-center gap-3 rounded-xl hover:opacity-90 transition-opacity -m-1 p-1"
+        >
+          <StepLogo size={38} title="" className="shrink-0 drop-shadow-[0_4px_10px_rgba(92,184,255,0.35)]" />
+          <div className="min-w-0 leading-none">
+            <p className="text-white font-extrabold text-base tracking-tight">STEP</p>
+            <p className="text-slate-400 text-[0.65rem] mt-1 truncate">Sales Team Execution Platform</p>
+            <p className="text-slate-500 text-[0.6rem] mt-0.5">by Skintific</p>
           </div>
         </Link>
       </div>
