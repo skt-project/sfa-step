@@ -147,6 +147,16 @@ def _row_to_visit(row: dict, items: list[dict] | None = None) -> VisitOut:
 # ------------------------------------------------------------------
 # POST /visit/checkin
 # ------------------------------------------------------------------
+def _bust_kpi_cache(bq: "BQClient", salesman_sk: str | None) -> None:
+    """Invalidate cached day-KPIs so the mobile Home + team dashboards reflect a
+    visit change immediately. /dashboard/kpi and /dashboard/team TTL-cache their
+    results (120s) — without this, 'Rangkuman Hari Ini' stays stale until the
+    cache expires. Called from checkin/checkout/submit."""
+    if salesman_sk:
+        bq.cache.invalidate(f"kpi:{salesman_sk}:")
+    bq.cache.invalidate("team-kpi:")
+
+
 @router.post("/checkin", response_model=CheckinResponse, status_code=201)
 def checkin(body: CheckinRequest, current_user: UserContext = Depends(require_auth)):
     bq = BQClient.get()
@@ -226,6 +236,7 @@ def checkin(body: CheckinRequest, current_user: UserContext = Depends(require_au
         ],
     )
 
+    _bust_kpi_cache(bq, body.salesman_sk)
     return CheckinResponse(
         visit_id=visit_id,
         checkin_distance_m=dist_m,
@@ -299,6 +310,7 @@ def checkout(
             bq.p("vid",        "STRING",    visit_id),
         ],
     )
+    _bust_kpi_cache(bq, visit.get("salesman_sk"))
     return _get_visit_detail(visit_id, bq)
 
 
@@ -393,6 +405,8 @@ def submit_visit(
             bq.p("vid",    "STRING",    visit_id),
         ],
     )
+
+    _bust_kpi_cache(bq, visit.get("salesman_sk"))
 
     # Notify all SPVs in one batch INSERT (avoids N×BQ-call timeout)
     try:
