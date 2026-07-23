@@ -17,6 +17,8 @@ This folder documents the system **as actually built and deployed**. The numbere
 | [09-windows-server-deployment.md](09-windows-server-deployment.md) | Migrating STEP Web hosting to an on-prem Windows Server |
 | [10-production-readiness-audit.md](10-production-readiness-audit.md) | Readiness verdict, findings register, web RBAC matrix, remediation backlog (2026-07-21) |
 | [adr-0001-bigquery-as-transactional-store.md](adr-0001-bigquery-as-transactional-store.md) | ADR: why BigQuery is the OLTP store, mitigations, and revisit triggers |
+| [11-e2e-test-cases.md](11-e2e-test-cases.md) | Formal E2E test-case suite (objective/precondition/steps/validation/pass-fail/priority) across the full business process |
+| [12-step-design-system.md](12-step-design-system.md) | STEP design system — brand hierarchy, logo, color/type/spacing/radius/shadow tokens, component classes, animation & a11y rules |
 
 **Golden rules for anyone touching this system**
 1. `D:\GitHub\sfa-step` (`github.com/skt-project/sfa-step`, branch `main`) is the **only** production web/backend repo. `skintific-step` is a deprecated working copy.
