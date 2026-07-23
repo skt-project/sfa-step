@@ -14,7 +14,7 @@ interface Props {
 export default function TopNav({ title, subtitle, actions }: Props) {
   useEffect(() => {
     document.title = `${title} — STEP`;
-    return () => { document.title = "STEP — Territory & Execution Platform"; };
+    return () => { document.title = "STEP — Sales Team Execution Platform"; };
   }, [title]);
 
   const { data: notifications } = useQuery<Notification[]>({
