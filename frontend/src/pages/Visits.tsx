@@ -5,6 +5,7 @@ import TopNav from "@/components/layout/TopNav";
 import { Icon, SkeletonTable, EmptyState } from "@/components/ui";
 import { listVisits } from "@/api/visit";
 import { useDebounce } from "@/hooks/useDebounce";
+import { useAuthStore } from "@/store/authStore";
 import type { Visit, VisitApprovalStatus } from "@/types";
 
 const APPROVAL_STATUS_MAP: Record<VisitApprovalStatus, { label: string; cls: string }> = {
@@ -27,11 +28,6 @@ function ApprovalBadge({ status }: { status: string | null }) {
 
 type TabKey = "waiting" | "all";
 
-const TAB_CONFIG: { key: TabKey; label: string }[] = [
-  { key: "waiting", label: "Menunggu SPV" },
-  { key: "all",     label: "Semua Kunjungan" },
-];
-
 export default function Visits() {
   const navigate  = useNavigate();
   const [tab,          setTab]          = useState<TabKey>("waiting");
@@ -41,12 +37,25 @@ export default function Visits() {
   const [page,         setPage]         = useState(1);
   const debouncedStoreSearch = useDebounce(storeSearch, 350);
 
+  // Role-aware first tab. A Distributor Manager's actionable queue is
+  // SPV-approved visits — NOT PENDING_SPV, a status their backend scope can
+  // never return, which left the DM's default view permanently empty and made
+  // approved visits look like they were "never delivered".
+  const role          = useAuthStore((s) => s.user?.role);
+  const isDistributor = role === "dm";
+  const waitingLabel  = isDistributor ? "Menunggu Distributor" : "Menunggu SPV";
+  const waitingStatus = isDistributor ? "SPV_APPROVED" : "PENDING_SPV";
+  const tabs: { key: TabKey; label: string }[] = [
+    { key: "waiting", label: waitingLabel },
+    { key: "all",     label: "Semua Kunjungan" },
+  ];
+
   const activeStatus = tab === "waiting" && !statusFilter
-    ? "PENDING_SPV"
+    ? waitingStatus
     : statusFilter || undefined;
 
   const { data, isLoading, isFetching } = useQuery({
-    queryKey: ["visits-list", tab, dateFilter, statusFilter, debouncedStoreSearch, page],
+    queryKey: ["visits-list", tab, role, dateFilter, statusFilter, debouncedStoreSearch, page],
     queryFn: () =>
       listVisits({
         visit_date:  dateFilter              || undefined,
@@ -56,6 +65,7 @@ export default function Visits() {
         page_size:   50,
       }),
     staleTime: 30_000,
+    refetchOnWindowFocus: true,   // queue auto-refreshes when SPV/DM returns to the tab
     placeholderData: (prev) => prev,
   });
 
@@ -74,7 +84,7 @@ export default function Visits() {
       <main className="flex-1 overflow-y-auto">
         {/* ── Tabs ── */}
         <div className="tabs px-6" role="tablist" aria-label="Filter kunjungan">
-          {TAB_CONFIG.map(({ key, label }) => (
+          {tabs.map(({ key, label }) => (
             <button
               key={key}
               role="tab"
