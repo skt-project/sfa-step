@@ -955,10 +955,20 @@ def download_pdf(
             except Exception:
                 return str(d)
 
-        # ── Palette ─────────────────────────────────────────────────
-        C_BLUE   = (37,  99,  235)
-        C_DBLUE  = (30,  58,  138)
-        C_LBLUE  = (191, 219, 254)   # blue-200
+        # ── Brand palette — dynamic by Business Unit ─────────────────
+        # G2G → Glad2Glow (magenta/pink); SKT / default → Skintific (blue).
+        # The whole document themes off C_BLUE/C_DBLUE/C_LBLUE, so selecting them
+        # per-BU here re-brands the entire PDF (header, stats, table, accents).
+        _BRANDING = {
+            "G2G": {"name": "GLAD2GLOW", "primary": (219, 39, 119), "dark": (131, 24, 67),  "light": (251, 207, 232)},
+            "SKT": {"name": "SKINTIFIC", "primary": (37,  99, 235), "dark": (30,  58, 138), "light": (191, 219, 254)},
+        }
+        _bu    = (visit_out.brand_group or "").strip().upper()
+        _brand = _BRANDING["G2G"] if _bu in ("G2G", "GLAD2GLOW") else _BRANDING["SKT"]
+        BRAND_NAME = _brand["name"]
+        C_BLUE   = _brand["primary"]   # brand primary
+        C_DBLUE  = _brand["dark"]      # brand dark
+        C_LBLUE  = _brand["light"]     # brand light
         C_WHITE  = (255, 255, 255)
         C_BG     = (248, 250, 252)   # slate-50
         C_BG2    = (241, 245, 249)   # slate-100
@@ -1019,7 +1029,7 @@ def download_pdf(
         pdf.set_xy(9, 6)
         pdf.set_font("Helvetica", "B", 14)
         pdf.set_text_color(*C_WHITE)
-        pdf.cell(100, 7, "SKINTIFIC")
+        pdf.cell(100, 7, BRAND_NAME)
 
         pdf.set_xy(9, 14)
         pdf.set_font("Helvetica", "", 8)

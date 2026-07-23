@@ -3,6 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import TopNav from "@/components/layout/TopNav";
 import { Icon, Skeleton, EmptyState } from "@/components/ui";
+import Modal from "@/components/ui/Modal";
 import { toast } from "@/store/toastStore";
 import { getVisit, approveVisit, rejectVisit, updateFinalQty, updateStorePrice, updateAdjustment, downloadVisitPdf } from "@/api/visit";
 import { useAuthStore } from "@/store/authStore";
@@ -127,6 +128,7 @@ export default function VisitDetail() {
   const [rejectNotes, setRejectNotes] = useState("");
   const rejectBtnRef = useRef<HTMLButtonElement>(null);
   const [pdfLoading,  setPdfLoading]  = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   const [finalQtyMap,  setFinalQtyMap]  = useState<Record<string, number>>({});
   const [priceMap,     setPriceMap]     = useState<Record<string, number>>({});
@@ -862,7 +864,13 @@ export default function VisitDetail() {
                     <button
                       className="btn-primary w-full"
                       disabled={approveMut.isPending}
-                      onClick={() => approveMut.mutate()}
+                      onClick={() =>
+                        // Distributor final approval → review summary first; other
+                        // approvals (SPV) stay immediate (backward compatible).
+                        isDistAdm && ["SPV_APPROVED", "ASM_APPROVED"].includes(visit.approval_status ?? "")
+                          ? setConfirmOpen(true)
+                          : approveMut.mutate()
+                      }
                     >
                       {approveMut.isPending
                         ? <Icon name="arrow-path" className="w-4 h-4 animate-spin" />
@@ -942,6 +950,99 @@ export default function VisitDetail() {
           </div>
         </div>
       </main>
+
+      {/* ── Distributor approval confirmation — mirrors the generated PDF ── */}
+      <Modal
+        open={confirmOpen}
+        onClose={() => setConfirmOpen(false)}
+        title="Konfirmasi Persetujuan"
+        maxWidth="2xl"
+        footer={
+          <>
+            <button className="btn-secondary" onClick={() => setConfirmOpen(false)}>Kembali</button>
+            <button
+              className="btn-primary"
+              disabled={approveMut.isPending}
+              onClick={() => approveMut.mutate(undefined, { onSuccess: () => setConfirmOpen(false) })}
+            >
+              {approveMut.isPending
+                ? <Icon name="arrow-path" className="w-4 h-4 animate-spin" />
+                : <Icon name="check-circle" className="w-4 h-4" />}
+              {approveMut.isPending ? "Menyetujui…" : "Setujui Final"}
+            </button>
+          </>
+        }
+      >
+        <div className="space-y-5">
+          <p className="text-xs text-slate-500 -mt-1">
+            Periksa ringkasan order di bawah — data ini identik dengan PDF yang akan dihasilkan.
+          </p>
+
+          {/* Visit information */}
+          <div>
+            <p className="text-2xs font-semibold text-slate-400 uppercase tracking-wide mb-2">Informasi Kunjungan</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 text-sm">
+              <div className="flex justify-between gap-2"><span className="text-slate-500">Tanggal</span><span className="font-medium text-slate-800">{visit.visit_date}</span></div>
+              <div className="flex justify-between gap-2"><span className="text-slate-500">Business Unit</span><span className="font-medium text-slate-800">{visit.brand_group ?? "—"}</span></div>
+              <div className="flex justify-between gap-2 min-w-0"><span className="text-slate-500 shrink-0">Salesman</span><span className="font-medium text-slate-800 truncate">{visit.salesman_name ?? visit.salesman_sk}</span></div>
+              <div className="flex justify-between gap-2"><span className="text-slate-500">Distributor</span><span className="font-medium text-slate-800 truncate">{visit.distributor_code ?? "—"}</span></div>
+              <div className="flex justify-between gap-2 sm:col-span-2 min-w-0"><span className="text-slate-500 shrink-0">Outlet</span><span className="font-medium text-slate-800 truncate">{visit.store_name ?? visit.outlet_sk}</span></div>
+            </div>
+          </div>
+
+          {/* Order details */}
+          <div>
+            <p className="text-2xs font-semibold text-slate-400 uppercase tracking-wide mb-2">Detail Order</p>
+            <div className="table-container">
+              <table className="table text-sm">
+                <thead>
+                  <tr>
+                    <th>Produk</th>
+                    <th className="text-right">Qty</th>
+                    <th className="text-right">Harga Toko/PCS</th>
+                    <th className="text-right">Subtotal</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {items.map((it) => {
+                    const q = finalQtyMap[it.sku_id] ?? it.final_qty ?? it.qty ?? 0;
+                    const p = priceMap[it.sku_id] ?? it.price_for_store ?? it.stp ?? 0;
+                    return (
+                      <tr key={it.sku_id}>
+                        <td>{it.sku_name ?? it.sku_id}{it.sku_size ? <span className="text-slate-400"> · {it.sku_size}</span> : null}</td>
+                        <td className="text-right tabular-nums">{q}</td>
+                        <td className="text-right tabular-nums">{fmtRp(p)}</td>
+                        <td className="text-right tabular-nums font-medium">{fmtRp(q * p)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Order summary */}
+          <div className="rounded-xl bg-slate-50 border border-slate-100 p-4 space-y-2">
+            <div className="flex justify-between text-sm"><span className="text-slate-500">Total SKU</span><span className="font-medium text-slate-800 tabular-nums">{items.length}</span></div>
+            <div className="flex justify-between text-sm"><span className="text-slate-500">Total Qty</span><span className="font-medium text-slate-800 tabular-nums">{totalFinalQty} pcs</span></div>
+            {(visit.adjustment_amount ?? 0) !== 0 && (
+              <>
+                <div className="flex justify-between text-sm"><span className="text-slate-500">Subtotal</span><span className="font-medium text-slate-800 tabular-nums">{fmtRp(grandTotal)}</span></div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-slate-500 truncate">Penyesuaian{visit.adjustment_note ? ` · ${visit.adjustment_note}` : ""}</span>
+                  <span className={`font-medium tabular-nums ${(visit.adjustment_amount ?? 0) < 0 ? "text-red-600" : "text-amber-600"}`}>
+                    {(visit.adjustment_amount ?? 0) > 0 ? "+ " : "− "}{fmtRp(Math.abs(visit.adjustment_amount ?? 0))}
+                  </span>
+                </div>
+              </>
+            )}
+            <div className="flex justify-between items-center pt-2 border-t border-slate-200">
+              <span className="text-sm font-semibold text-slate-700">Grand Total</span>
+              <span className="text-lg font-bold text-emerald-600 tabular-nums">{fmtRp(grandTotal + (visit.adjustment_amount ?? 0))}</span>
+            </div>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }
