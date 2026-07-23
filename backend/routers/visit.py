@@ -1007,11 +1007,18 @@ def download_pdf(
             (i.final_qty if i.final_qty is not None else (i.qty or 0))
             for i in visit_out.items
         )
-        has_prices = any(i.price_for_store is not None and i.price_for_store > 0 for i in visit_out.items)
+        # Effective store price: the DM's Harga Toko/PCS when set, otherwise the
+        # recommended price (STP). Mirrors the web + approval-modal fallback
+        # (priceMap ?? price_for_store ?? stp) so the PDF total is never blank
+        # when only STP is available.
+        def _eff_price(i) -> float:
+            p = i.price_for_store
+            return p if (p is not None and p > 0) else (i.stp or 0)
+
+        has_prices = any(_eff_price(i) > 0 for i in visit_out.items)
         grand_total_price = sum(
-            (i.final_qty if i.final_qty is not None else (i.qty or 0)) * (i.price_for_store or 0)
+            (i.final_qty if i.final_qty is not None else (i.qty or 0)) * _eff_price(i)
             for i in visit_out.items
-            if i.price_for_store is not None
         )
 
         # ── Document setup ───────────────────────────────────────────
@@ -1154,7 +1161,7 @@ def download_pdf(
 
         for idx, item in enumerate(visit_out.items, 1):
             eff_qty    = item.final_qty if item.final_qty is not None else (item.qty or 0)
-            price      = item.price_for_store or 0
+            price      = _eff_price(item)
             total_price = eff_qty * price
             fq_modified = item.final_qty is not None and item.final_qty != item.qty
 
