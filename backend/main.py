@@ -8,9 +8,9 @@ from fastapi.responses import JSONResponse
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
-from slowapi.util import get_remote_address
 
 from config import settings
+from services.ratelimit import client_ip
 from routers import (
     auth, dashboard, photo, product, route, salesman, schedule, sku, stock, visit,
     skipped_store, weekly_cleanup,
@@ -20,7 +20,7 @@ from routers import (
     store_opportunity, pjp_upload, import_export,
 )
 
-limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
+limiter = Limiter(key_func=client_ip, default_limits=["200/minute"])
 
 app = FastAPI(
     title="STEP API",

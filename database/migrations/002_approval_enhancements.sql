@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS `skintific-data-warehouse.sfa_web.step_skipped_store`
   spv_action_at     TIMESTAMP          OPTIONS(description='UTC timestamp of SPV action'),
   spv_notes         STRING             OPTIONS(description='Optional SPV notes'),
   executed_visit_id STRING             OPTIONS(description='visit_id when SPV executed the visit'),
-  is_deleted        BOOL      NOT NULL DEFAULT FALSE,
+  is_deleted        BOOL      ,
   created_at        TIMESTAMP NOT NULL OPTIONS(description='Row insert time')
 );
 

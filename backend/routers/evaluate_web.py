@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta
 from fastapi import APIRouter, Depends, Query
 
 from config import settings
-from dependencies import brand_group_filter, require_auth
+from dependencies import assert_brand_group_allowed, brand_group_filter, require_auth
 from models.auth import UserContext
 from services.bq import BQClient
 
@@ -68,6 +68,16 @@ def evaluate_salesman(
 ):
     bq = BQClient.get()
     date_from, date_to = _parse_week(week)
+
+    # E2E-03: scope the requested salesman to the caller's brand group before
+    # serving anything (incl. a shared cache hit), matching /evaluate/team's filter.
+    sm_bg = bq.query_one_cached(
+        f"sm-brand-group:{salesman_sk}",
+        f"SELECT brand_group FROM {SFA_WEB}.dim_salesman WHERE salesman_sk = @sk LIMIT 1",
+        [bq.p("sk", "STRING", salesman_sk)],
+        ttl=300,
+    )
+    assert_brand_group_allowed(current_user, (sm_bg or {}).get("brand_group"))
 
     # Show visited outlets + planned-but-not-visited outlets for the week.
     # Uses fact_route_plan_pjp directly (no vw_route_compliance needed).

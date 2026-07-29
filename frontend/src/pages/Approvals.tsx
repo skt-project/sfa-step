@@ -62,15 +62,27 @@ export default function Approvals() {
   });
 
   const decideMutation = useMutation({
-    mutationFn: ({ id, decision }: { id: string; decision: "approve" | "reject" }) =>
-      api.post(`/approvals/${id}/${decision}`, { comment }),
-    onSuccess: (_, { decision }) => {
+    mutationFn: ({ id, decision }: { id: string; decision: "approve" | "reject" | "revise" }) =>
+      api.post(`/approvals/${id}/${decision}`, { comment }).then((r) => r.data),
+    onSuccess: (data: { applied?: boolean } | undefined, { decision }) => {
       qc.invalidateQueries({ queryKey: ["approvals"] });
       setSelected(null);
       setComment("");
-      toast.success(decision === "approve" ? "Permintaan disetujui." : "Permintaan ditolak.");
+      const msg =
+        decision === "approve"
+          ? data?.applied
+            ? "Permintaan disetujui & perubahan diterapkan."
+            : "Permintaan disetujui."
+          : decision === "reject"
+            ? "Permintaan ditolak."
+            : "Permintaan dikembalikan untuk revisi.";
+      toast.success(msg);
     },
-    onError: () => toast.error("Gagal memproses permintaan."),
+    // Surface the server's reason (e.g. a 409 race, or out-of-scope 403).
+    onError: (err: { response?: { data?: { detail?: unknown } } }) => {
+      const detail = err?.response?.data?.detail;
+      toast.error(typeof detail === "string" ? detail : "Gagal memproses permintaan.");
+    },
   });
 
   const canDecide = user?.role === "asm" || user?.role === "dm" || user?.role === "ho_admin";
@@ -261,6 +273,15 @@ export default function Approvals() {
                     >
                       <Icon name="x-mark" className="w-4 h-4" />
                       Tolak
+                    </button>
+                    <button
+                      className="btn-secondary flex-1"
+                      onClick={() => decideMutation.mutate({ id: selected.approval_id, decision: "revise" })}
+                      disabled={!comment.trim() || decideMutation.isPending}
+                      title="Kembalikan ke pengaju untuk diperbaiki (wajib komentar)"
+                    >
+                      <Icon name="arrow-path" className="w-4 h-4" />
+                      Minta Revisi
                     </button>
                     <button
                       className="btn-primary flex-1"
