@@ -61,6 +61,8 @@ export const NAV_TREE: NavItem[] = [
       { to: "/store-opportunity", label: "Store Opportunity", roles: ["asm", "dm", "ho_admin"] },
       { to: "/store360",          label: "Store 360°",        roles: ["spv", "asm", "dm", "ho_admin"] },
       { to: "/salesman360",       label: "Salesman 360°",     roles: ["spv", "asm", "dm", "ho_admin"] },
+      // External (non-SFA) transaction source — distributor-scoped, read-only.
+      { to: "/transaction-history", label: "Transaction History", roles: ["dm", "ho_admin"] },
     ],
   },
   {

@@ -25,6 +25,7 @@ const VisitDetail       = lazy(() => import("@/pages/VisitDetail"));
 const Administration    = lazy(() => import("@/pages/Administration"));
 const ImportExport      = lazy(() => import("@/pages/ImportExport"));
 const Notifications     = lazy(() => import("@/pages/Notifications"));
+const ExtTransactions   = lazy(() => import("@/pages/ExtTransactions"));
 
 // ── Per-page loading skeleton ──────────────────────────────────────────────
 function PageFallback() {
@@ -109,6 +110,9 @@ function AppRoutes() {
         {/* Visits & Demand */}
         <Route path="visits"            element={<RoutedPage><Visits /></RoutedPage>} />
         <Route path="visits/:visitId"   element={<RoutedPage><VisitDetail /></RoutedPage>} />
+
+        {/* External (non-SFA) transaction source */}
+        <Route path="transaction-history" element={<RoutedPage><ExtTransactions /></RoutedPage>} />
 
         {/* Admin */}
         <Route path="administration"    element={<RoutedPage><Administration /></RoutedPage>} />

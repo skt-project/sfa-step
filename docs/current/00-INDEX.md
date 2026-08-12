@@ -19,6 +19,7 @@ This folder documents the system **as actually built and deployed**. The numbere
 | [adr-0001-bigquery-as-transactional-store.md](adr-0001-bigquery-as-transactional-store.md) | ADR: why BigQuery is the OLTP store, mitigations, and revisit triggers |
 | [11-e2e-test-cases.md](11-e2e-test-cases.md) | Formal E2E test-case suite (objective/precondition/steps/validation/pass-fail/priority) across the full business process |
 | [12-step-design-system.md](12-step-design-system.md) | STEP design system — brand hierarchy, logo, color/type/spacing/radius/shadow tokens, component classes, animation & a11y rules |
+| [17-external-distributor-transactions.md](17-external-distributor-transactions.md) | External (non-SFA) distributor transaction history — source, join, mapping, distributor authorization, sync, data quality |
 
 **Golden rules for anyone touching this system**
 1. `D:\GitHub\sfa-step` (`github.com/skt-project/sfa-step`, branch `main`) is the **only** production web/backend repo. `skintific-step` is a deprecated working copy.

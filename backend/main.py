@@ -18,6 +18,8 @@ from routers import (
     dashboard_web, announcement, approval, target_web, evaluate_web,
     route_planner, report_web, salesman_web, outlet_web, notification, admin_web,
     store_opportunity, pjp_upload, import_export,
+    # External (non-SFA) transaction source — separate read model, see docs/current/17
+    ext_transaction,
 )
 
 limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
@@ -78,6 +80,7 @@ app.include_router(pjp_upload.router,     prefix="/api/v1")
 app.include_router(skipped_store.router,   prefix="/api/v1")
 app.include_router(weekly_cleanup.router,  prefix="/api/v1")
 app.include_router(import_export.router,   prefix="/api/v1")
+app.include_router(ext_transaction.router, prefix="/api/v1")
 
 
 @app.get("/health")
