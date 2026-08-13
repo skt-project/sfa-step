@@ -133,6 +133,19 @@ class BQClient:
         job_config = bigquery.QueryJobConfig(query_parameters=params or [])
         self._client.query(sql, job_config=job_config).result()
 
+    def execute_dml(
+        self,
+        sql: str,
+        params: list[bigquery.ScalarQueryParameter] | None = None,
+    ) -> int:
+        """Run DML and return the number of rows affected. Used for compare-and-set
+        UPDATEs (e.g. `... WHERE status='pending'`) so a caller can detect a lost
+        race (0 rows affected → someone else already transitioned the row)."""
+        job_config = bigquery.QueryJobConfig(query_parameters=params or [])
+        job = self._client.query(sql, job_config=job_config)
+        job.result()
+        return job.num_dml_affected_rows or 0
+
     def insert_rows(self, table_id: str, rows: list[dict]) -> None:
         """Streaming insert — use for single-row audit-log writes."""
         full_id = f"{settings.bq_project}.{settings.bq_dataset}.{table_id}"

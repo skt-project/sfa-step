@@ -31,8 +31,8 @@ class VisitItemIn(BaseModel):
     brand: str | None = None
     brand_group: str | None = None
     category: str | None = None
-    stp: float = 0.0
-    qty: int = 0
+    stp: float = Field(0.0, ge=0)          # price must never be negative
+    qty: int = Field(0, ge=0)              # quantity must never be negative
 
 
 class CheckoutRequest(BaseModel):
@@ -40,7 +40,7 @@ class CheckoutRequest(BaseModel):
     checkout_longitude: float | None = None
     checkout_photo_url: str | None = None
     notes: str | None = None
-    total_demand: float = 0.0
+    total_demand: float = Field(0.0, ge=0)
     effective_call: Literal["YES", "NO"] = "NO"
     items: list[VisitItemIn] = Field(default_factory=list)
     offline_mode: bool = False
@@ -49,7 +49,7 @@ class CheckoutRequest(BaseModel):
 
 class SubmitRequest(BaseModel):
     offline_mode: bool = False
-    total_demand: float = 0.0
+    total_demand: float = Field(0.0, ge=0)
     effective_call: Literal["YES", "NO"] = "NO"
     items: list[VisitItemIn] = Field(default_factory=list)
 
@@ -63,7 +63,7 @@ class RejectRequest(BaseModel):
 
 
 class ResubmitRequest(BaseModel):
-    total_demand: float = 0.0
+    total_demand: float = Field(0.0, ge=0)
     notes: str | None = None
     checkout_photo_url: str | None = None
     items: list[VisitItemIn] = Field(default_factory=list)
@@ -86,7 +86,7 @@ class VisitItemOut(BaseModel):
 
 class FinalQtyItem(BaseModel):
     sku_id: str
-    final_qty: int
+    final_qty: int = Field(..., ge=0)      # SPV-adjusted qty must never be negative
 
 
 class UpdateFinalQtyRequest(BaseModel):
@@ -95,7 +95,7 @@ class UpdateFinalQtyRequest(BaseModel):
 
 class StorePriceItem(BaseModel):
     sku_id: str
-    price_for_store: float
+    price_for_store: float = Field(..., ge=0)
 
 
 class UpdateStorePriceRequest(BaseModel):

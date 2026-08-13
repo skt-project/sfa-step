@@ -34,6 +34,21 @@ CHUNK = 500  # max rows per BigQuery MERGE
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
+MAX_UPLOAD_BYTES = 8 * 1024 * 1024  # 8 MB — bounds memory; ~well above the row caps
+
+
+def _read_csv_upload(file: UploadFile) -> list[dict]:
+    """E2E-31/E2E-15: validate the filename (guarding against a null filename →
+    AttributeError → 500) and cap the raw upload size BEFORE buffering the whole
+    file, then parse."""
+    if not (file.filename or "").lower().endswith(".csv"):
+        raise HTTPException(status_code=422, detail="Only CSV files are accepted. Convert from Excel first.")
+    content = file.file.read(MAX_UPLOAD_BYTES + 1)
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"File too large. Maximum {MAX_UPLOAD_BYTES // (1024 * 1024)} MB.")
+    return _parse_csv(content)
+
+
 def _parse_csv(content: bytes) -> list[dict]:
     text = content.decode("utf-8-sig")
     reader = csv.DictReader(io.StringIO(text))
@@ -115,10 +130,7 @@ def import_salesman(
     file: UploadFile = File(...),
     current_user: UserContext = Depends(require_role("ho_admin")),
 ):
-    if not file.filename.lower().endswith(".csv"):
-        raise HTTPException(status_code=422, detail="Only CSV files are accepted. Convert from Excel first.")
-
-    rows = _parse_csv(file.file.read())
+    rows = _read_csv_upload(file)
     if len(rows) > 10_000:
         raise HTTPException(status_code=422, detail="Maximum 10,000 rows per upload.")
     _check_required(rows[0], {"source_salesman_code", "salesman_name", "salesman_type"})
@@ -200,10 +212,7 @@ def import_outlet(
     file: UploadFile = File(...),
     current_user: UserContext = Depends(require_role("ho_admin")),
 ):
-    if not file.filename.lower().endswith(".csv"):
-        raise HTTPException(status_code=422, detail="Only CSV files are accepted. Convert from Excel first.")
-
-    rows = _parse_csv(file.file.read())
+    rows = _read_csv_upload(file)
     if len(rows) > 20_000:
         raise HTTPException(status_code=422, detail="Maximum 20,000 rows per upload.")
     _check_required(rows[0], {"source_outlet_code", "store_name"})
@@ -286,10 +295,7 @@ def import_target(
     file: UploadFile = File(...),
     current_user: UserContext = Depends(require_role("ho_admin")),
 ):
-    if not file.filename.lower().endswith(".csv"):
-        raise HTTPException(status_code=422, detail="Only CSV files are accepted. Convert from Excel first.")
-
-    rows = _parse_csv(file.file.read())
+    rows = _read_csv_upload(file)
     if len(rows) > 5_000:
         raise HTTPException(status_code=422, detail="Maximum 5,000 rows per upload.")
     _check_required(rows[0], {"salesman_code", "brand", "period_month", "management_target"})

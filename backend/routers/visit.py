@@ -17,7 +17,7 @@ offline_mode=true skips all server-side blocking checks.
 """
 import io
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -114,6 +114,30 @@ def _assert_spv_owns_visit(bq: "BQClient", user: UserContext, visit_salesman_sk:
         raise HTTPException(status_code=403, detail="Kunjungan ini milik salesman SPV lain")
 
 
+def _assert_can_act_on_visit(bq: "BQClient", user: UserContext, visit_salesman_sk: str | None) -> None:
+    """Object-level authorization for by-id visit mutations/reads (E2E-01).
+
+    - salesman/se : may only act on their OWN visits.
+    - spv         : may only act on their mapped team's visits (unmapped SPV exempt,
+                    same fallback as list_visits — see _assert_spv_owns_visit).
+    - asm/dm/ho_admin/demo : broader roles; further gated per-endpoint by the
+                    approval state machine (_next_approval_status) and role checks.
+
+    Without this, any authenticated user with a visit_id could check out / submit /
+    resubmit / read any visit — the random VST- id was the only barrier.
+    """
+    role = user.role
+    if role in ("salesman", "se"):
+        own = user.salesman_sk or user.user_id
+        if visit_salesman_sk and str(visit_salesman_sk) != str(own):
+            raise HTTPException(status_code=403, detail="Kunjungan ini bukan milik Anda")
+        return
+    if role == "spv":
+        _assert_spv_owns_visit(bq, user, visit_salesman_sk)
+        return
+    # asm / dm / ho_admin / demo: allowed here; downstream role+status guards apply.
+
+
 def _next_approval_status(current: str, role: str) -> str:
     """Return next approval_status when caller with `role` approves.
     Flow: SE submits → PENDING_SPV → (SPV) SPV_APPROVED → (dm / ho_admin) COMPLETED
@@ -162,6 +186,17 @@ def checkin(body: CheckinRequest, current_user: UserContext = Depends(require_au
     bq = BQClient.get()
     now = datetime.now(timezone.utc)
     captured = body.captured_at or now
+
+    # E2E-02: a field user may only check in as themselves — never trust a
+    # client-supplied salesman_sk for salesman/se roles (visit-attribution spoofing).
+    if current_user.role in ("salesman", "se") and current_user.salesman_sk:
+        body.salesman_sk = current_user.salesman_sk
+
+    # E2E-02: reject future-dated visits. Offline queues are always PAST-dated
+    # (the visit already happened), so this never blocks legitimate sync; it only
+    # stops forward-dating that would skew route-compliance / KPI windows.
+    if body.visit_date > (now.date() + timedelta(days=1)):
+        raise HTTPException(status_code=422, detail="visit_date tidak boleh di masa depan")
 
     # Idempotency — same schedule already checked in → return existing
     if body.schedule_id:
@@ -265,6 +300,8 @@ def checkout(
     if not visit:
         raise HTTPException(status_code=404, detail="Visit not found")
 
+    _assert_can_act_on_visit(bq, current_user, visit.get("salesman_sk"))
+
     # Duration
     cin_time = visit.get("checkin_time")
     duration = None
@@ -275,8 +312,11 @@ def checkout(
 
     # Guard: reject items whose brand falls outside the user's business group.
     # ho_admin and accounts with no brand_group are unrestricted.
+    # E2E-26: offline-synced visits skip this (per the documented offline_mode
+    # contract) so a visit recorded offline can never get stuck permanently
+    # 'failed' on a brand check it can't satisfy after the fact.
     # Items are NOT inserted here — they are only stored in BigQuery after Submit to SPV.
-    if current_user.brand_group and current_user.role != "ho_admin":
+    if current_user.brand_group and current_user.role != "ho_admin" and not body.offline_mode:
         allowed = set(BRAND_GROUPS.get(current_user.brand_group, []))
         for item in body.items:
             if item.qty > 0 and item.brand and item.brand.upper() not in allowed:
@@ -333,12 +373,15 @@ def submit_visit(
     if not visit:
         raise HTTPException(status_code=404, detail="Visit not found")
 
+    _assert_can_act_on_visit(bq, current_user, visit.get("salesman_sk"))
+
     # Idempotency: if already SUBMITTED (e.g. sync engine retry after client timeout) return immediately
     if visit.get("visit_status") == "SUBMITTED":
         return _get_visit_detail(visit_id, bq)
 
-    # Brand group guard (defence-in-depth — checkout already validated)
-    if current_user.brand_group and current_user.role != "ho_admin":
+    # Brand group guard (defence-in-depth — checkout already validated).
+    # E2E-26: skipped for offline syncs, matching checkout above.
+    if current_user.brand_group and current_user.role != "ho_admin" and not body.offline_mode:
         allowed = set(BRAND_GROUPS.get(current_user.brand_group, []))
         for item in body.items:
             if item.qty > 0 and item.brand and item.brand.upper() not in allowed:
@@ -408,7 +451,10 @@ def submit_visit(
 
     _bust_kpi_cache(bq, visit.get("salesman_sk"))
 
-    # Notify all SPVs in one batch INSERT (avoids N×BQ-call timeout)
+    # E2E-11: notify only the SPV(s) who actually manage this salesman
+    # (dim_salesman.spv_name == users.full_name), not every SPV in the company.
+    # One batch INSERT avoids N×BQ-call timeout. If the salesman is unmapped
+    # (no matching spv_name), nobody is paged — correct per One-Line-Management.
     try:
         bq.execute(
             f"""
@@ -416,20 +462,25 @@ def submit_visit(
               (notification_id, user_id, type, title, body,
                is_read, is_deleted, deep_link, created_at)
             SELECT
-              CONCAT('NOTIF-', SUBSTR(TO_HEX(FARM_FINGERPRINT(CONCAT(user_id, @vid))), 2, 16)),
-              user_id,
+              CONCAT('NOTIF-', SUBSTR(TO_HEX(FARM_FINGERPRINT(CONCAT(u.user_id, @vid))), 2, 16)),
+              u.user_id,
               'VISIT_SUBMITTED',
               'Kunjungan Baru Perlu Disetujui',
               @body,
               FALSE, FALSE, @dl, @now
-            FROM {settings.table('users')}
-            WHERE role = 'spv' AND is_active = TRUE
+            FROM {settings.table('users')} u
+            WHERE u.role = 'spv' AND u.is_active = TRUE
+              AND UPPER(u.full_name) = UPPER((
+                SELECT spv_name FROM {settings.table('dim_salesman')}
+                WHERE salesman_sk = @sm_sk AND is_active = TRUE LIMIT 1
+              ))
             """,
             [
-                bq.p("vid",  "STRING",    visit_id),
-                bq.p("body", "STRING",    f"Kunjungan {visit_id} menunggu persetujuan Anda."),
-                bq.p("dl",   "STRING",    f"visits/{visit_id}"),
-                bq.p("now",  "TIMESTAMP", now.isoformat()),
+                bq.p("vid",   "STRING",    visit_id),
+                bq.p("sm_sk", "STRING",    visit.get("salesman_sk")),
+                bq.p("body",  "STRING",    f"Kunjungan {visit_id} menunggu persetujuan Anda."),
+                bq.p("dl",    "STRING",    f"visits/{visit_id}"),
+                bq.p("now",   "TIMESTAMP", now.isoformat()),
             ],
         )
     except Exception:
@@ -461,7 +512,8 @@ def approve_visit(
 
     _assert_spv_owns_visit(bq, current_user, visit.get("salesman_sk"))
 
-    new_status = _next_approval_status(visit["approval_status"], effective_role)
+    current_status = visit["approval_status"]
+    new_status = _next_approval_status(current_status, effective_role)
 
     role_col_map = {
         "spv":      ("spv_username", "spv_approved_at"),
@@ -470,22 +522,29 @@ def approve_visit(
     }
     user_col, ts_col = role_col_map.get(effective_role, ("spv_username", "spv_approved_at"))
 
-    bq.execute(
+    # E2E-13: compare-and-set on approval_status. BigQuery has no row locks, so two
+    # approvers reading the same status could both transition it (last-write-wins,
+    # lost update). Guarding the UPDATE with the status we read + checking the
+    # affected-row count makes the transition atomic: the loser gets a 409.
+    affected = bq.execute_dml(
         f"""
         UPDATE {settings.table('fact_visit')} SET
           approval_status = @new_status,
           {user_col} = @approver,
           {ts_col} = @now,
           updated_at = @now
-        WHERE visit_id = @vid
+        WHERE visit_id = @vid AND approval_status = @expected
         """,
         [
             bq.p("new_status", "STRING",    new_status),
             bq.p("approver",   "STRING",    current_user.username),
             bq.p("now",        "TIMESTAMP", now.isoformat()),
             bq.p("vid",        "STRING",    visit_id),
+            bq.p("expected",   "STRING",    current_status),
         ],
     )
+    if affected == 0:
+        raise HTTPException(status_code=409, detail="Status kunjungan sudah berubah. Muat ulang lalu coba lagi.")
 
     # Notify the salesman that their visit was approved
     if salesman_sk := visit.get("salesman_sk"):
@@ -583,11 +642,21 @@ def resubmit_visit(
     now = datetime.now(timezone.utc)
 
     visit = bq.query_one(
-        f"SELECT visit_id FROM {settings.table('fact_visit')} WHERE visit_id = @vid AND is_deleted = FALSE",
+        f"SELECT visit_id, salesman_sk, approval_status FROM {settings.table('fact_visit')} WHERE visit_id = @vid AND is_deleted = FALSE",
         [bq.p("vid", "STRING", visit_id)],
     )
     if not visit:
         raise HTTPException(status_code=404, detail="Visit not found")
+
+    _assert_can_act_on_visit(bq, current_user, visit.get("salesman_sk"))
+
+    # E2E-01: only a visit that was sent back for revision may be resubmitted.
+    # Without this a COMPLETED/SPV_APPROVED visit could be reopened to PENDING_SPV.
+    if visit.get("approval_status") != "REVISION_REQUIRED":
+        raise HTTPException(
+            status_code=400,
+            detail="Hanya kunjungan berstatus revisi yang dapat dikirim ulang",
+        )
 
     # Delete old items and re-insert (final_qty resets to qty on resubmit)
     bq.execute(
@@ -622,9 +691,18 @@ def resubmit_visit(
                 ],
             )
 
-    update_parts = ["total_demand = @demand", "approval_status = 'PENDING_SPV'",
+    # E2E-08: recompute total_demand + effective_call from the submitted items
+    # (server is the source of truth), exactly like submit_visit — never trust the
+    # client's total_demand, and refresh effective_call so a revision that zeroes
+    # all items correctly flips EC to 'NO'.
+    resubmit_demand = sum(round(i.qty * i.stp, 2) for i in body.items if i.qty > 0)
+    resubmit_ec = "YES" if any(i.qty > 0 for i in body.items) else "NO"
+
+    update_parts = ["total_demand = @demand", "effective_call = @ec",
+                    "approval_status = 'PENDING_SPV'",
                     "visit_status = 'SUBMITTED'", "updated_at = @now"]
-    params = [bq.p("demand", "FLOAT64", body.total_demand), bq.p("now", "TIMESTAMP", now.isoformat()),
+    params = [bq.p("demand", "FLOAT64", resubmit_demand), bq.p("ec", "STRING", resubmit_ec),
+              bq.p("now", "TIMESTAMP", now.isoformat()),
               bq.p("vid", "STRING", visit_id)]
 
     if body.notes is not None:
@@ -755,6 +833,7 @@ def get_visit(visit_id: str, current_user: UserContext = Depends(require_auth)):
     visit = _get_visit_detail(visit_id, bq)
     if not visit:
         raise HTTPException(status_code=404, detail="Visit not found")
+    _assert_can_act_on_visit(bq, current_user, visit.salesman_sk)
     return visit
 
 
@@ -774,11 +853,13 @@ def update_final_qty(
     now = datetime.now(timezone.utc)
 
     visit = bq.query_one(
-        f"SELECT visit_id, approval_status FROM {settings.table('fact_visit')} WHERE visit_id = @vid AND is_deleted = FALSE",
+        f"SELECT visit_id, approval_status, salesman_sk FROM {settings.table('fact_visit')} WHERE visit_id = @vid AND is_deleted = FALSE",
         [bq.p("vid", "STRING", visit_id)],
     )
     if not visit:
         raise HTTPException(status_code=404, detail="Visit not found")
+
+    _assert_can_act_on_visit(bq, current_user, visit.get("salesman_sk"))
 
     # Role-based status guard — ensures SPV acts before dist_admin, not after
     approval_status = visit.get("approval_status", "")
@@ -816,10 +897,25 @@ def update_final_qty(
         params,
     )
 
+    # E2E-06: re-derive the visit's total_demand from the EFFECTIVE quantity
+    # (final_qty when the SPV set it, else the original qty). Previously final_qty
+    # edits never propagated here, so dashboards/reports/360 (which read
+    # fact_visit.total_demand) diverged from the detail view/PDF (which use
+    # final_qty). This makes total_demand == the approved order everywhere.
     bq.execute(
-        f"UPDATE {settings.table('fact_visit')} SET updated_at = @now WHERE visit_id = @vid",
+        f"""
+        UPDATE {settings.table('fact_visit')} SET
+          total_demand = (
+            SELECT COALESCE(SUM(COALESCE(final_qty, qty) * stp), 0)
+            FROM {settings.table('fact_visit_item')}
+            WHERE visit_id = @vid
+          ),
+          updated_at = @now
+        WHERE visit_id = @vid
+        """,
         [bq.p("now", "TIMESTAMP", now.isoformat()), bq.p("vid", "STRING", visit_id)],
     )
+    _bust_kpi_cache(bq, visit.get("salesman_sk"))  # dashboards read total_demand
 
     return _get_visit_detail(visit_id, bq)
 
