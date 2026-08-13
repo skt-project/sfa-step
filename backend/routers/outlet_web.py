@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from config import settings
-from dependencies import require_auth
+from dependencies import assert_brand_name_allowed, brand_name_filter, require_auth
 from models.auth import UserContext
 from services.bq import BQClient
 
@@ -44,7 +44,14 @@ def list_outlets(
     if unassigned_only:
         clauses.append("sm.salesman_name IS NULL")
 
-    where = ("WHERE o.is_active = TRUE AND " + " AND ".join(clauses)) if clauses else "WHERE o.is_active = TRUE"
+    # E2E-03: restrict to the caller's brand group (marketing-name column).
+    bn_clause, bn_params = brand_name_filter(current_user, col="brand", table_alias="o")
+    where = "WHERE o.is_active = TRUE"
+    if clauses:
+        where += " AND " + " AND ".join(clauses)
+    if bn_clause:
+        where += f" {bn_clause}"
+        params.extend(bn_params)
     params.append(bq.p("lim", "INT64", limit))
 
     rows = bq.query(
@@ -82,18 +89,21 @@ def search_outlets(
     current_user: UserContext = Depends(require_auth),
 ):
     bq = BQClient.get()
+    # E2E-03: brand-scope the search and include the scope in the cache key.
+    bn_clause, bn_params = brand_name_filter(current_user, col="brand")
     return bq.query_cached(
-        f"outlet-search:{q.lower()}",
+        f"outlet-search:{q.lower()}:{current_user.brand_group or 'all'}",
         f"""
         SELECT CAST(outlet_sk AS STRING) AS outlet_id, outlet_sk, source_outlet_code, store_name
         FROM {SFA_WEB}.dim_outlet
         WHERE (LOWER(store_name) LIKE LOWER(CONCAT('%',@q,'%'))
            OR  LOWER(source_outlet_code) LIKE LOWER(CONCAT('%',@q,'%')))
           AND is_active = TRUE
+          {bn_clause}
         ORDER BY store_name
         LIMIT 20
         """,
-        [bq.p("q", "STRING", q)],
+        [bq.p("q", "STRING", q)] + bn_params,
         ttl=300,  # 5 min — dim_outlet changes only on master import
     )
 
@@ -105,6 +115,11 @@ def assign_outlet(
 ):
     if current_user.role not in ("spv", "asm", "dm", "ho_admin"):
         raise HTTPException(status_code=403, detail="Not allowed")
+    # E2E-29: a non-numeric salesman_sk previously raised ValueError → 500.
+    try:
+        sk_int = int(body.salesman_sk)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="salesman_sk must be numeric")
     bq = BQClient.get()
     bq.execute(
         f"""
@@ -113,7 +128,7 @@ def assign_outlet(
         WHERE CAST(outlet_sk AS STRING) = @oid
         """,
         [
-            bq.p("sk",  "INT64",  int(body.salesman_sk)),
+            bq.p("sk",  "INT64",  sk_int),
             bq.p("oid", "STRING", body.outlet_id),
         ],
     )
@@ -132,12 +147,14 @@ def store_360(outlet_id: str, current_user: UserContext = Depends(require_auth))
     cache_key = f"store360:{outlet_id}:{today}"
     cached = bq.cache.get(cache_key)
     if cached is not None:
+        # E2E-03: enforce brand scope even on a shared cache hit.
+        assert_brand_name_allowed(current_user, cached.get("brand"))
         return cached
 
     profile = bq.query_one(
         f"""
         SELECT
-          o.outlet_sk, o.source_outlet_code, o.store_name, o.kecamatan, o.city,
+          o.outlet_sk, o.source_outlet_code, o.store_name, o.brand, o.kecamatan, o.city,
           o.store_grade AS tier, o.channel, o.is_active, o.latitude, o.longitude,
           sm.salesman_name, sm.source_salesman_code AS salesman_code,
           spv.salesman_name AS spv_name
@@ -150,6 +167,10 @@ def store_360(outlet_id: str, current_user: UserContext = Depends(require_auth))
     )
     if not profile:
         raise HTTPException(status_code=404, detail="Outlet not found")
+
+    # E2E-03: a restricted user may only open an outlet within their brand group
+    # (unclassified/NULL-brand outlets stay visible — see assert_brand_name_allowed).
+    assert_brand_name_allowed(current_user, profile.get("brand"))
 
     kpi = bq.query_one(
         f"""
@@ -248,6 +269,10 @@ def pjp_list(
     if search:
         params.append(bq.p("q", "STRING", search))
 
+    # E2E-03: restrict PJP rows to the caller's brand group (outlet brand name).
+    bn_clause, bn_params = brand_name_filter(current_user, col="brand", table_alias="o")
+    params.extend(bn_params)
+
     rows = bq.query(
         f"""
         SELECT
@@ -261,7 +286,7 @@ def pjp_list(
         FROM {SFA_WEB}.fact_route_plan_pjp p
         JOIN {SFA_WEB}.dim_outlet o USING (outlet_sk)
         JOIN {SFA_WEB}.dim_salesman sm USING (salesman_sk)
-        WHERE p.is_deleted = FALSE AND {search_clause}
+        WHERE p.is_deleted = FALSE AND {search_clause} {bn_clause}
         ORDER BY o.store_name
         LIMIT @lim
         """,

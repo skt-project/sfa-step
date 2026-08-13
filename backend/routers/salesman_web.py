@@ -8,7 +8,7 @@ from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from config import settings
-from dependencies import brand_group_filter, require_auth
+from dependencies import assert_brand_group_allowed, brand_group_filter, require_auth
 from models.auth import UserContext
 from services.bq import BQClient
 
@@ -102,12 +102,14 @@ def salesman_360(
     cache_key = f"salesman360:{salesman_sk}:{today}"
     cached = bq.cache.get(cache_key)
     if cached is not None:
+        # E2E-03: enforce brand scope even on a cache hit (cache is shared across users).
+        assert_brand_group_allowed(current_user, cached.get("brand_group"))
         return cached
 
     profile = bq.query_one(
         f"""
         SELECT salesman_sk, source_salesman_code, salesman_name, salesman_type,
-               distributor_code, region, spv_name, asm_name, is_active
+               distributor_code, region, spv_name, asm_name, is_active, brand_group
         FROM {SFA_WEB}.dim_salesman
         WHERE salesman_sk = @sk
         """,
@@ -116,6 +118,10 @@ def salesman_360(
 
     if not profile:
         raise HTTPException(status_code=404, detail="Salesman not found")
+
+    # E2E-03: a restricted user may only open a salesman within their brand group,
+    # matching what /salesman/list and /salesman/search already return.
+    assert_brand_group_allowed(current_user, profile.get("brand_group"))
 
     mtd_row = bq.query_one(
         f"""

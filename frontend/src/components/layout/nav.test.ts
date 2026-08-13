@@ -39,6 +39,19 @@ describe("navigation RBAC matrix", () => {
     }
   });
 
+  it("shows Transaction History only to dm and ho_admin", () => {
+    // External (non-SFA) transaction source: distributor-scoped by design, so an
+    // spv/asm must not even see the entry. Backend enforcement is independent
+    // (routers/ext_transaction require_role) — this guards the menu half.
+    const reports = NAV_TREE.find((i) => isGroup(i) && i.id === "reports") as NavGroup;
+    const leaf = reports.children.find((c) => c.to === "/transaction-history")!;
+    expect(leaf).toBeDefined();
+    expect(leaf.roles).toEqual(expect.arrayContaining(["dm", "ho_admin"]));
+    expect(leaf.roles).not.toContain("spv");
+    expect(leaf.roles).not.toContain("asm");
+    expect(leaf.roles).not.toContain("salesman");
+  });
+
   it("every leaf grants at least one role and only known roles", () => {
     const known = new Set<Role>(ALL_ROLES);
     for (const item of NAV_TREE) {

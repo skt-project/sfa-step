@@ -782,16 +782,33 @@ OPTIONS (description = "Runtime configuration table for salesman_pjp_v2 / STEP w
 
 CREATE OR REPLACE PROCEDURE `skintific-data-warehouse.sfa_step.sp_reload_fact_route_plan_pjp`()
 BEGIN
-  TRUNCATE TABLE `skintific-data-warehouse.sfa_step.fact_route_plan_pjp`;
-
-  INSERT INTO `skintific-data-warehouse.sfa_step.fact_route_plan_pjp`
-    (route_plan_sk, salesman_sk, outlet_sk, source_salesman_name, source_outlet_code, distributor_code,
-     distributor_name, region, asm_name, visit_day_of_week, visit_week_pattern, visit_frequency_code,
-     batch_uploaded_at, sfa_step_loaded_at, is_deleted)
+  -- E2E-22: atomic full reload. The previous TRUNCATE + INSERT left the table
+  -- EMPTY if the INSERT failed partway — route plans (Route Planner, PJP list,
+  -- route compliance) would disappear app-wide until the next successful run.
+  -- CREATE OR REPLACE TABLE ... AS SELECT swaps the contents in ONE atomic
+  -- operation: readers see either the complete old table or the complete new one,
+  -- never an empty/partial state. PARTITION BY / CLUSTER BY are restated so the
+  -- physical layout matches the original table definition.
+  CREATE OR REPLACE TABLE `skintific-data-warehouse.sfa_step.fact_route_plan_pjp`
+  PARTITION BY DATE(batch_uploaded_at)
+  CLUSTER BY salesman_sk, outlet_sk
+  AS
   SELECT
-    `skintific-data-warehouse.sfa_step.fn_surrogate_key`('PJP', CONCAT(p.kode_distributor, '|', p.nama_salesman, '|', p.kode_toko, '|', p.hari, '|', p.minggu)),
-    sm.salesman_sk, ot.outlet_sk, p.nama_salesman, p.kode_toko, p.kode_distributor, p.nama_distributor,
-    p.region, p.asm, p.hari, p.minggu, p.frekuensi, SAFE_CAST(p.uploaded_at AS TIMESTAMP), CURRENT_TIMESTAMP(), FALSE
+    `skintific-data-warehouse.sfa_step.fn_surrogate_key`('PJP', CONCAT(p.kode_distributor, '|', p.nama_salesman, '|', p.kode_toko, '|', p.hari, '|', p.minggu)) AS route_plan_sk,
+    sm.salesman_sk,
+    ot.outlet_sk,
+    p.nama_salesman        AS source_salesman_name,
+    p.kode_toko            AS source_outlet_code,
+    p.kode_distributor     AS distributor_code,
+    p.nama_distributor     AS distributor_name,
+    p.region               AS region,
+    p.asm                  AS asm_name,
+    p.hari                 AS visit_day_of_week,
+    p.minggu               AS visit_week_pattern,
+    p.frekuensi            AS visit_frequency_code,
+    SAFE_CAST(p.uploaded_at AS TIMESTAMP) AS batch_uploaded_at,
+    CURRENT_TIMESTAMP()    AS sfa_step_loaded_at,
+    FALSE                  AS is_deleted
   FROM `skintific-data-warehouse.gt_schema.gt_master_salesman_pjp` p
   LEFT JOIN `skintific-data-warehouse.sfa_step.dim_salesman` sm
     ON sm.source_system = 'GT_MAPPING' AND sm.salesman_name = p.nama_salesman

@@ -8,9 +8,9 @@ from fastapi.responses import JSONResponse
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
-from slowapi.util import get_remote_address
 
 from config import settings
+from services.ratelimit import client_ip
 from routers import (
     auth, dashboard, photo, product, route, salesman, schedule, sku, stock, visit,
     skipped_store, weekly_cleanup,
@@ -18,9 +18,11 @@ from routers import (
     dashboard_web, announcement, approval, target_web, evaluate_web,
     route_planner, report_web, salesman_web, outlet_web, notification, admin_web,
     store_opportunity, pjp_upload, import_export,
+    # External (non-SFA) transaction source — separate read model, see docs/current/17
+    ext_transaction,
 )
 
-limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
+limiter = Limiter(key_func=client_ip, default_limits=["200/minute"])
 
 app = FastAPI(
     title="STEP API",
@@ -78,6 +80,7 @@ app.include_router(pjp_upload.router,     prefix="/api/v1")
 app.include_router(skipped_store.router,   prefix="/api/v1")
 app.include_router(weekly_cleanup.router,  prefix="/api/v1")
 app.include_router(import_export.router,   prefix="/api/v1")
+app.include_router(ext_transaction.router, prefix="/api/v1")
 
 
 @app.get("/health")

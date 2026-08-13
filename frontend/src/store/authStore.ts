@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { jwtDecode } from "jwt-decode";
 import type { User } from "@/types";
-import { clearToken, getToken, saveToken } from "@/api/client";
+import { api, clearToken, getToken, saveToken } from "@/api/client";
 
 interface AuthState {
   user: User | null;
@@ -56,6 +56,9 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
 
   logout: () => {
+    // E2E-14: revoke the session server-side (best-effort — the interceptor won't
+    // redirect on this call's own 401), then clear the local token.
+    api.post("/auth/logout").catch(() => { /* best-effort */ });
     clearToken();
     set({ token: null, user: null, isAuthenticated: false });
   },

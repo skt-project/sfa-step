@@ -41,7 +41,15 @@ def list_salesmen_for_planner(
     """Return the salesman rail data (no pagination — full list for the sidebar)."""
     bq = BQClient.get()
 
-    cache_key = f"route:salesmen:{distributor_code}:{region}:{current_user.role}"
+    # E2E-05: the SQL below scopes by brand_group + the caller's own
+    # distributor_code (dm) / territory (spv/asm), so the cache key MUST include
+    # all of them — otherwise two callers with different scope collide and one
+    # sees the other's list.
+    cache_key = (
+        f"route:salesmen:{distributor_code}:{region}:{current_user.role}:"
+        f"{current_user.brand_group or 'all'}:"
+        f"{current_user.distributor_code or ''}:{current_user.territory or ''}"
+    )
     cached = bq.cache.get(cache_key)
     if cached is not None:
         return cached

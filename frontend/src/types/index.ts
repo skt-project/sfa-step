@@ -284,6 +284,80 @@ export interface SkippedStore {
   executed_visit_id: string | null;
 }
 
+// ── External distributor transactions ─────────────────────────────────────────
+// Sourced from an external spreadsheet, NOT from the SFA visit pipeline. Kept in
+// its own types so an SFA schema change cannot silently alter this contract.
+export interface ExtTransactionItem {
+  ext_visit_item_id: string;
+  sku_id: string | null;
+  sku_name: string | null;
+  brand: string | null;
+  category: string | null;
+  qty: number | null;
+  stp: number | null;
+  demand: number | null;
+  line_value: number | null;
+}
+
+export interface ExtTransaction {
+  ext_visit_id: string;
+  visit_date: string | null;
+  source_username: string | null;
+  salesman_sk: string | null;
+  salesman_name: string | null;
+  source_store_id: string | null;
+  outlet_sk: string | null;
+  store_name: string | null;
+  distributor_code: string | null;
+  brand_group: string | null;
+  visit_status: string | null;
+  effective_call: string | null;
+  source_visit_type: string | null;
+  notes: string | null;
+  duration_minutes: number | null;
+  checkin_time: string | null;
+  checkout_time: string | null;
+  item_count: number;
+  computed_qty: number | null;
+  computed_value: number | null;
+  source_total_demand: number | null;
+  total_mismatch: boolean;
+  synced_at: string | null;
+}
+
+export interface ExtTransactionDetail extends ExtTransaction {
+  items: ExtTransactionItem[];
+}
+
+export interface ExtTransactionSummary {
+  transactions: number;
+  total_quantity: number;
+  total_value: number;
+  unique_stores: number;
+  unique_products: number;
+  unmapped_stores: number;
+}
+
+export interface ExtTransactionListResponse {
+  data: ExtTransaction[];
+  pagination: {
+    page: number;
+    page_size: number;
+    total: number;
+    total_pages: number;
+    has_next: boolean;
+  };
+  summary: ExtTransactionSummary;
+  source_available: boolean;
+}
+
+export interface ExtSalesmanOption {
+  salesman_sk: string | null;
+  source_username: string | null;
+  salesman_name: string | null;
+  transactions: number;
+}
+
 // ── Notification ──────────────────────────────────────────────────────────────
 export type NotificationType = "approval" | "announcement" | "compliance" | "target" | "system";
 

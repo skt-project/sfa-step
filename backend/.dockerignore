@@ -1,0 +1,26 @@
+# Keep secrets and local cruft OUT of the container image.
+#
+# The Dockerfile does `COPY . .`, so without this file a local
+# `docker build` bakes backend/.env — containing the real JWT_SECRET and the
+# BigQuery key path — into every published image layer, readable by anyone who
+# can pull it. Runtime config comes from Cloud Run env vars, never from a
+# committed/copied .env, so excluding it changes nothing about how the app runs.
+.env
+.env.*
+*-credentials.local.txt
+*.json.key
+bq-*.json
+
+# Local caches / build noise
+__pycache__/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# VCS
+.git/
+.gitignore

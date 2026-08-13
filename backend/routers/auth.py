@@ -11,9 +11,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from google.cloud import bigquery
 from pydantic import BaseModel
 from slowapi import Limiter
-from slowapi.util import get_remote_address
 
 from config import settings
+from services.ratelimit import client_ip
 from dependencies import require_auth, require_role
 from models.auth import LoginRequest, TokenResponse, UserContext
 from services.audit import log_event
@@ -26,7 +26,7 @@ from services.auth import (
 from services.bq import BQClient
 
 router = APIRouter(prefix="/auth", tags=["auth"])
-limiter = Limiter(key_func=get_remote_address)
+limiter = Limiter(key_func=client_ip)
 
 
 def _get_user_by_username(username: str) -> dict | None:
@@ -73,6 +73,18 @@ def login(request: Request, body: LoginRequest):
     sk = user.get("salesman_sk")
     brand_group = user.get("brand_group")
 
+    # E2E-14: read the user's current token_version (default 0) so this token can be
+    # revoked later by bumping it. Defensive: pre-migration-004 the column is absent.
+    token_version = 0
+    try:
+        tvr = bq.query_one(
+            f"SELECT token_version FROM {settings.table('users')} WHERE user_id = @id",
+            [bq.p("id", "STRING", user["user_id"])],
+        )
+        token_version = int((tvr or {}).get("token_version") or 0)
+    except Exception:
+        token_version = 0
+
     # Real SE accounts are linked via salesman_sk to dim_salesman which carries
     # brand_group — the users table may not have it populated, so fall back.
     if not brand_group and sk:
@@ -92,6 +104,7 @@ def login(request: Request, body: LoginRequest):
         "distributor_code": user.get("distributor_code"),
         "brand_group": brand_group,
         "salesman_sk": sk or None,
+        "tv": token_version,
     }
     token = create_access_token(token_payload)
 
@@ -112,6 +125,25 @@ def login(request: Request, body: LoginRequest):
 @router.get("/me", response_model=UserContext)
 def me(current_user: UserContext = Depends(require_auth)):
     return current_user
+
+
+@router.post("/logout")
+def logout(current_user: UserContext = Depends(require_auth)):
+    """E2E-14: real server-side logout. Bumps token_version so every outstanding
+    token for this user stops working immediately (not just the local copy)."""
+    bq = BQClient.get()
+    try:
+        bq.execute(
+            f"UPDATE {settings.table('users')} "
+            "SET token_version = COALESCE(token_version, 0) + 1, updated_at = CURRENT_TIMESTAMP() "
+            "WHERE user_id = @id",
+            [bq.p("id", "STRING", current_user.user_id)],
+        )
+        bq.cache.invalidate(f"tokver:{current_user.user_id}")
+    except Exception:
+        pass  # pre-migration-004: no token_version column → logout stays client-side
+    log_event("user.logout", "user", current_user.user_id, current_user.username)
+    return {"message": "Logged out."}
 
 
 # ── Password reset ──────────────────────────────────────────────────────────
@@ -150,6 +182,17 @@ def reset_password(body: ResetPasswordRequest):
         f"UPDATE {settings.table('users')} SET password_hash = @pw, updated_at = CURRENT_TIMESTAMP() WHERE user_id = @uid",
         [bq.p("pw", "STRING", hash_password(body.new_password)), bq.p("uid", "STRING", user_id)],
     )
+    # E2E-14/17: invalidate all existing sessions when the password changes, and
+    # (best-effort) the reset token's own reuse window closes with them.
+    try:
+        bq.execute(
+            f"UPDATE {settings.table('users')} "
+            "SET token_version = COALESCE(token_version, 0) + 1 WHERE user_id = @uid",
+            [bq.p("uid", "STRING", user_id)],
+        )
+        bq.cache.invalidate(f"tokver:{user_id}")
+    except Exception:
+        pass  # pre-migration-004: no token_version column
     log_event("user.password_reset", "user", user_id, "system")
     return {"message": "Password updated successfully."}
 
