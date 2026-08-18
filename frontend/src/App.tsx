@@ -1,6 +1,8 @@
 import { lazy, Suspense, type ReactNode } from "react";
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { useAuthStore } from "@/store/authStore";
+import { canAccessPath, defaultPathFor } from "@/components/layout/nav";
+import type { Role } from "@/types";
 import { Toaster } from "@/components/ui";
 import Layout from "@/components/layout/Layout";
 import Login from "@/pages/Login";
@@ -25,7 +27,6 @@ const VisitDetail       = lazy(() => import("@/pages/VisitDetail"));
 const Administration    = lazy(() => import("@/pages/Administration"));
 const ImportExport      = lazy(() => import("@/pages/ImportExport"));
 const Notifications     = lazy(() => import("@/pages/Notifications"));
-const ExtTransactions   = lazy(() => import("@/pages/ExtTransactions"));
 
 // ── Per-page loading skeleton ──────────────────────────────────────────────
 function PageFallback() {
@@ -48,10 +49,35 @@ function PageFallback() {
 // ── Route wrapper: error isolation + lazy-load skeleton ───────────────────
 function RoutedPage({ children }: { children: ReactNode }) {
   return (
-    <ErrorBoundary>
-      <Suspense fallback={<PageFallback />}>{children}</Suspense>
-    </ErrorBoundary>
+    <RoleGuard>
+      <ErrorBoundary>
+        <Suspense fallback={<PageFallback />}>{children}</Suspense>
+      </ErrorBoundary>
+    </RoleGuard>
   );
+}
+
+// ── Role-aware landing target ──────────────────────────────────────────────
+// "/dashboard" is NOT a universal home: a Distributor has no Dashboard entry.
+// Anything that used to hard-code it must resolve the role's first allowed
+// route instead, or a Distributor lands on a page it is then bounced off.
+function HomeRedirect() {
+  const role = useAuthStore((s) => s.user?.role) as Role | undefined;
+  const home = role ? defaultPathFor(role) : null;
+  return <Navigate to={home ?? "/login"} replace />;
+}
+
+// ── Route-level RBAC ───────────────────────────────────────────────────────
+// Menu visibility alone is not access control: without this, any authenticated
+// user could open /administration by typing the URL. The backend still refused
+// the data, but the page shell rendered. Authorization is derived from NAV_TREE
+// so the menu and the router can never disagree.
+function RoleGuard({ children }: { children: ReactNode }) {
+  const role = useAuthStore((s) => s.user?.role) as Role | undefined;
+  const location = useLocation();
+  if (!role) return <Navigate to="/login" replace />;
+  if (!canAccessPath(role, location.pathname)) return <HomeRedirect />;
+  return <>{children}</>;
 }
 
 // ── Auth guard ─────────────────────────────────────────────────────────────
@@ -77,7 +103,7 @@ function AppRoutes() {
     <Routes>
       <Route
         path="/login"
-        element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <Login />}
+        element={isAuthenticated ? <HomeRedirect /> : <Login />}
       />
 
       <Route
@@ -87,7 +113,7 @@ function AppRoutes() {
           </AuthGuard>
         }
       >
-        <Route index element={<Navigate to="/dashboard" replace />} />
+        <Route index element={<HomeRedirect />} />
 
         <Route path="dashboard"          element={<RoutedPage><Dashboard /></RoutedPage>} />
         <Route path="route-planner"      element={<RoutedPage><RoutePlanner /></RoutedPage>} />
@@ -111,8 +137,6 @@ function AppRoutes() {
         <Route path="visits"            element={<RoutedPage><Visits /></RoutedPage>} />
         <Route path="visits/:visitId"   element={<RoutedPage><VisitDetail /></RoutedPage>} />
 
-        {/* External (non-SFA) transaction source */}
-        <Route path="transaction-history" element={<RoutedPage><ExtTransactions /></RoutedPage>} />
 
         {/* Admin */}
         <Route path="administration"    element={<RoutedPage><Administration /></RoutedPage>} />
@@ -125,7 +149,7 @@ function AppRoutes() {
         path="*"
         element={
           isAuthenticated
-            ? <Navigate to="/dashboard" replace />
+            ? <HomeRedirect />
             : <Navigate to="/login" replace />
         }
       />

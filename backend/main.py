@@ -20,6 +20,8 @@ from routers import (
     store_opportunity, pjp_upload, import_export,
     # External (non-SFA) transaction source — separate read model, see docs/current/17
     ext_transaction,
+    # Unified multi-source order list (SFA + spreadsheet) for Visit & Order
+    orders,
 )
 
 limiter = Limiter(key_func=client_ip, default_limits=["200/minute"])
@@ -81,6 +83,7 @@ app.include_router(skipped_store.router,   prefix="/api/v1")
 app.include_router(weekly_cleanup.router,  prefix="/api/v1")
 app.include_router(import_export.router,   prefix="/api/v1")
 app.include_router(ext_transaction.router, prefix="/api/v1")
+app.include_router(orders.router,          prefix="/api/v1")
 
 
 @app.get("/health")

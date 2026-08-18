@@ -523,7 +523,10 @@ def export_visits(current_user: UserContext = Depends(require_auth)):
           CAST(v.checkout_time AS STRING) AS checkout_time,
           v.effective_call,
           COALESCE(v.total_demand, 0)     AS total_demand,
-          v.status
+          -- step_visit has no `status` column; the workflow state the rest of
+          -- the app calls "Status" is approval_status. Selecting v.status made
+          -- this export fail with a BigQuery 400 on every call.
+          v.approval_status               AS status
         FROM {settings.table('fact_visit')} v
         JOIN {SFA_WEB}.dim_salesman sm USING (salesman_sk)
         JOIN {SFA_WEB}.dim_outlet o ON o.outlet_sk = v.outlet_sk

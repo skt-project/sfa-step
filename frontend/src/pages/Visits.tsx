@@ -1,14 +1,17 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import TopNav from "@/components/layout/TopNav";
-import { Icon, SkeletonTable, EmptyState } from "@/components/ui";
-import { listVisits } from "@/api/visit";
+import { Icon, SkeletonTable, SkeletonStatCards, EmptyState, Modal } from "@/components/ui";
+import { listOrders, getOrderDetail, exportOrders, type OrderFilters } from "@/api/orders";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useAuthStore } from "@/store/authStore";
-import type { Visit, VisitApprovalStatus } from "@/types";
+import { toast } from "@/store/toastStore";
+import type { OrderRow, OrderSource, VisitApprovalStatus } from "@/types";
 
-const APPROVAL_STATUS_MAP: Record<VisitApprovalStatus, { label: string; cls: string }> = {
+const PAGE_SIZE = 50;
+
+const APPROVAL_STATUS_MAP: Record<string, { label: string; cls: string }> = {
   DRAFT:             { label: "Draft",         cls: "badge-gray"   },
   SUBMITTED:         { label: "Submitted",     cls: "badge-yellow" },
   PENDING_SPV:       { label: "Menunggu SPV",  cls: "badge-yellow" },
@@ -20,70 +23,161 @@ const APPROVAL_STATUS_MAP: Record<VisitApprovalStatus, { label: string; cls: str
   REJECTED:          { label: "Ditolak",       cls: "badge-red"    },
 };
 
-function ApprovalBadge({ status }: { status: string | null }) {
+function StatusBadge({ status }: { status: string | null }) {
   const s = (status ?? "DRAFT") as VisitApprovalStatus;
-  const { label, cls } = APPROVAL_STATUS_MAP[s] ?? { label: s, cls: "badge-gray" };
+  const { label, cls } = APPROVAL_STATUS_MAP[s] ?? { label: status ?? "—", cls: "badge-gray" };
   return <span className={cls}>{label}</span>;
 }
+
+/** Provenance is visible in the table itself — the user never has to open a row
+ *  just to find out where an order came from. */
+function SourceBadge({ source, label }: { source: OrderSource; label: string }) {
+  const cls = source === "SFA" ? "badge-blue" : "badge-purple";
+  return <span className={cls} title={label}>{source === "SFA" ? "SFA" : "Spreadsheet"}</span>;
+}
+
+const SOURCE_OPTIONS: { value: string; label: string }[] = [
+  { value: "ALL",         label: "Semua Sumber" },
+  { value: "SFA",         label: "STEP Handheld / SFA" },
+  { value: "SPREADSHEET", label: "Spreadsheet" },
+];
+
+const MONTHS_ID = ["Jan","Feb","Mar","Apr","Mei","Jun","Jul","Agu","Sep","Okt","Nov","Des"];
+
+/** Format a calendar date without constructing a Date — an order date is a
+ *  calendar day, not an instant, and must never be timezone-shifted. */
+function formatDate(iso: string | null): string {
+  if (!iso) return "—";
+  const [y, m, d] = iso.slice(0, 10).split("-");
+  if (!y || !m || !d) return iso;
+  return `${d} ${MONTHS_ID[Number(m) - 1] ?? m} ${y}`;
+}
+
+const rp = (n: number | null | undefined) =>
+  n == null ? "—" : `Rp ${Math.round(n).toLocaleString("id-ID")}`;
+const num = (n: number | null | undefined) =>
+  n == null ? "—" : n.toLocaleString("id-ID", { maximumFractionDigits: 2 });
 
 type TabKey = "waiting" | "all";
 
 export default function Visits() {
-  const navigate  = useNavigate();
-  const [tab,          setTab]          = useState<TabKey>("waiting");
-  const [dateFilter,   setDateFilter]   = useState("");
-  const [statusFilter, setStatusFilter] = useState("");
-  const [storeSearch,  setStoreSearch]  = useState("");
-  const [page,         setPage]         = useState(1);
-  const debouncedStoreSearch = useDebounce(storeSearch, 350);
+  const navigate = useNavigate();
+  const qc = useQueryClient();
 
-  // Role-aware first tab. A Distributor Manager's actionable queue is
-  // SPV-approved visits — NOT PENDING_SPV, a status their backend scope can
-  // never return, which left the DM's default view permanently empty and made
-  // approved visits look like they were "never delivered".
+  const [tab,         setTab]         = useState<TabKey>("waiting");
+  const [source,      setSource]      = useState("ALL");
+  const [dateFrom,    setDateFrom]    = useState("");
+  const [dateTo,      setDateTo]      = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [storeSearch, setStoreSearch] = useState("");
+  const [skuSearch,   setSkuSearch]   = useState("");
+  const [search,      setSearch]      = useState("");
+  const [page,        setPage]        = useState(1);
+  const [openRow,     setOpenRow]     = useState<OrderRow | null>(null);
+  const [exporting,   setExporting]   = useState(false);
+
+  const dStore  = useDebounce(storeSearch, 350);
+  const dSku    = useDebounce(skuSearch, 350);
+  const dSearch = useDebounce(search, 350);
+
+  // Role-aware default queue, preserved from the previous implementation: a
+  // Distributor's actionable queue is SPV-approved orders, not PENDING_SPV.
   const role          = useAuthStore((s) => s.user?.role);
   const isDistributor = role === "dm";
   const waitingLabel  = isDistributor ? "Menunggu Distributor" : "Menunggu SPV";
   const waitingStatus = isDistributor ? "SPV_APPROVED" : "PENDING_SPV";
   const tabs: { key: TabKey; label: string }[] = [
     { key: "waiting", label: waitingLabel },
-    { key: "all",     label: "Semua Kunjungan" },
+    { key: "all",     label: "Semua Order" },
   ];
 
-  const activeStatus = tab === "waiting" && !statusFilter
-    ? waitingStatus
-    : statusFilter || undefined;
+  const activeStatus = tab === "waiting" && !statusFilter ? waitingStatus : statusFilter || undefined;
 
-  const { data, isLoading, isFetching } = useQuery({
-    queryKey: ["visits-list", tab, role, dateFilter, statusFilter, debouncedStoreSearch, page],
-    queryFn: () =>
-      listVisits({
-        visit_date:  dateFilter              || undefined,
-        status:      activeStatus,
-        store_name:  debouncedStoreSearch    || undefined,
-        page,
-        page_size:   50,
-      }),
-    staleTime: 30_000,
-    refetchOnWindowFocus: true,   // queue auto-refreshes when SPV/DM returns to the tab
+  const filters: OrderFilters = {
+    from_date:    dateFrom || undefined,
+    to_date:      dateTo || undefined,
+    source,
+    status:       activeStatus,
+    store:        dStore || undefined,
+    sku:          dSku || undefined,
+    search:       dSearch || undefined,
+    page,
+    page_size:    PAGE_SIZE,
+  };
+
+  const { data, isLoading, isFetching, isError, dataUpdatedAt } = useQuery({
+    queryKey: ["orders", filters],
+    queryFn: () => listOrders(filters),
+    staleTime: 60_000,
     placeholderData: (prev) => prev,
   });
 
-  const visits     = data?.items ?? [];
-  const totalPages = data ? Math.ceil(data.total / 50) : 1;
+  const rows       = data?.data ?? [];
+  const summary    = data?.summary;
+  const pagination = data?.pagination;
+  const failed     = (data?.sources ?? []).filter((s) => !s.ok);
 
+  const hasFilters = !!(dateFrom || dateTo || statusFilter || storeSearch || skuSearch || search || source !== "ALL");
   const resetFilters = () => {
-    setDateFilter(""); setStatusFilter(""); setStoreSearch(""); setPage(1);
+    setDateFrom(""); setDateTo(""); setStatusFilter(""); setStoreSearch("");
+    setSkuSearch(""); setSearch(""); setSource("ALL"); setPage(1);
   };
-  const hasFilters = dateFilter || statusFilter || storeSearch;
+
+  const { data: detail, isLoading: detailLoading } = useQuery({
+    queryKey: ["order-detail", openRow?.source, openRow?.order_id],
+    queryFn: () => getOrderDetail(openRow!.source, openRow!.order_id),
+    enabled: !!openRow,
+  });
+
+  const openOrder = (o: OrderRow) => {
+    // SFA orders keep their existing full detail page (approvals, PDF, items).
+    if (o.source === "SFA") navigate(`/visits/${o.order_id}`);
+    else setOpenRow(o);
+  };
+
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      // Same filters as the list, minus paging: the workbook is the whole
+      // filtered set, not just the visible page.
+      const { page: _p, page_size: _ps, ...rest } = filters;
+      await exportOrders(rest);
+      toast.success("Excel berhasil diunduh.");
+    } catch {
+      toast.error("Gagal mengunduh Excel. Silakan coba lagi.");
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const tiles = [
+    { label: "Total Order",  value: summary ? summary.total_orders.toLocaleString("id-ID") : "—",     icon: "clipboard-document-list" as const, cls: "icon-badge-blue"   },
+    { label: "Pending",      value: summary ? summary.pending_orders.toLocaleString("id-ID") : "—",   icon: "clock"                   as const, cls: "icon-badge-amber"  },
+    { label: "Selesai",      value: summary ? summary.completed_orders.toLocaleString("id-ID") : "—", icon: "check-circle"            as const, cls: "icon-badge-green"  },
+    { label: "Total Qty",    value: summary ? num(summary.total_quantity) : "—",                      icon: "table-cells"             as const, cls: "icon-badge-indigo" },
+    { label: "Total Nilai",  value: summary ? rp(summary.total_value) : "—",                          icon: "currency-dollar"         as const, cls: "icon-badge-purple" },
+  ];
 
   return (
     <div className="flex flex-col h-full">
-      <TopNav title="Visit & Order" />
+      <TopNav
+        title="Visit & Order"
+        actions={
+          <button
+            className="btn-secondary text-sm flex items-center gap-1.5"
+            onClick={handleExport}
+            disabled={exporting || isLoading}
+          >
+            <Icon name={exporting ? "arrow-path" : "arrow-down-tray"}
+                  className={`w-4 h-4 ${exporting ? "animate-spin" : ""}`} />
+            {exporting ? "Menyiapkan..." : "Export Excel"}
+          </button>
+        }
+      />
 
       <main className="flex-1 overflow-y-auto">
         {/* ── Tabs ── */}
-        <div className="tabs px-6" role="tablist" aria-label="Filter kunjungan">
+        <div className="tabs px-6" role="tablist" aria-label="Filter order">
           {tabs.map(({ key, label }) => (
             <button
               key={key}
@@ -93,142 +187,185 @@ export default function Visits() {
               className={`tab ${tab === key ? "tab-active" : ""}`}
             >
               {label}
-              {key === "waiting" && data && tab === "waiting" && data.total > 0 && (
-                <span className="ml-2 badge-yellow text-2xs">
-                  {data.total}
-                </span>
-              )}
             </button>
           ))}
         </div>
 
-        {/* ── Filters ── */}
-        <div className="filter-bar">
-          <div className="search-bar w-52">
-            <Icon name="search" />
-            <input
-              type="text"
-              placeholder="Cari nama toko..."
-              aria-label="Cari nama toko"
-              value={storeSearch}
-              onChange={(e) => { setStoreSearch(e.target.value); setPage(1); }}
-            />
-          </div>
+        <div className="p-6 space-y-5">
+          {/* ── Per-source failures: one source down never hides the others ── */}
+          {failed.map((s) => (
+            <div key={s.source}
+                 className="flex items-start gap-2.5 rounded-lg border border-amber-200 bg-amber-50 px-3.5 py-2.5">
+              <Icon name="exclamation-triangle" className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
+              <p className="text-xs text-amber-900 leading-relaxed">
+                <span className="font-semibold">{s.error}</span>{" "}
+                Sumber lain tetap ditampilkan di bawah.
+              </p>
+            </div>
+          ))}
 
-          <input
-            type="date"
-            className="input w-44"
-            aria-label="Filter tanggal kunjungan"
-            value={dateFilter}
-            onChange={(e) => { setDateFilter(e.target.value); setPage(1); }}
-          />
-
-          {tab === "all" && (
-            <select
-              className="input w-52"
-              aria-label="Filter status kunjungan"
-              value={statusFilter}
-              onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
-            >
-              <option value="">Semua Status</option>
-              <option value="PENDING_SPV">Menunggu SPV</option>
-              <option value="SPV_APPROVED">SPV Approved</option>
-              <option value="ASM_APPROVED">ASM Approved</option>
-              <option value="DDM_APPROVED">DDM Approved</option>
-              <option value="REVISION_REQUIRED">Perlu Revisi</option>
-              <option value="COMPLETED">Selesai</option>
-              <option value="REJECTED">Ditolak</option>
-            </select>
+          {data?.truncated && (
+            <div className="flex items-start gap-2.5 rounded-lg border border-slate-200 bg-slate-50 px-3.5 py-2.5">
+              <Icon name="information-circle" className="w-4 h-4 text-slate-500 mt-0.5 shrink-0" />
+              <p className="text-xs text-slate-600">
+                Hasil dibatasi. Persempit filter atau rentang tanggal untuk melihat seluruh data.
+              </p>
+            </div>
           )}
 
-          {hasFilters && (
-            <button
-              className="btn-ghost btn-sm text-slate-400"
-              onClick={resetFilters}
-            >
-              <Icon name="x-mark" className="w-3.5 h-3.5" />
-              Reset
-            </button>
-          )}
-
-          <div className="ml-auto flex items-center gap-2">
-            {isFetching && (
-              <Icon name="arrow-path" className="w-4 h-4 text-slate-400 animate-spin" />
-            )}
-            <span className="text-xs text-slate-400 tabular-nums">
-              {data ? `${data.total.toLocaleString()} kunjungan` : ""}
-            </span>
-          </div>
-        </div>
-
-        {/* ── Table ── */}
-        <div className="p-6 space-y-4">
+          {/* ── Summary ── */}
           {isLoading ? (
-            <SkeletonTable rows={8} cols={7} />
+            <SkeletonStatCards count={5} />
+          ) : (
+            <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+              {tiles.map((c) => (
+                <div key={c.label} className="kpi-tile">
+                  <span className={`icon-badge ${c.cls}`}>
+                    <Icon name={c.icon} className="w-4 h-4" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="kpi-tile-value truncate">{c.value}</p>
+                    <p className="kpi-tile-label">{c.label}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* ── Source selector ── */}
+          <div className="flex gap-1 flex-wrap" role="group" aria-label="Filter sumber data">
+            {SOURCE_OPTIONS.map((o) => (
+              <button
+                key={o.value}
+                onClick={() => { setSource(o.value); setPage(1); }}
+                className={`chip ${source === o.value ? "chip-active" : ""}`}
+                aria-pressed={source === o.value}
+              >
+                {o.label}
+              </button>
+            ))}
+          </div>
+
+          {/* ── Filters ── */}
+          <div className="filter-bar">
+            <div className="search-bar w-56">
+              <Icon name="search" />
+              <input type="text" placeholder="Cari order / toko / SKU..." aria-label="Cari order"
+                     value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} />
+            </div>
+            <div className="search-bar w-44">
+              <Icon name="building-storefront" />
+              <input type="text" placeholder="Toko..." aria-label="Filter toko"
+                     value={storeSearch} onChange={(e) => { setStoreSearch(e.target.value); setPage(1); }} />
+            </div>
+            <div className="search-bar w-40">
+              <Icon name="tag" />
+              <input type="text" placeholder="SKU / produk..." aria-label="Filter SKU atau produk"
+                     value={skuSearch} onChange={(e) => { setSkuSearch(e.target.value); setPage(1); }} />
+            </div>
+            <input type="date" className="input w-36" aria-label="Tanggal mulai"
+                   value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setPage(1); }} />
+            <span className="text-xs text-slate-400">s/d</span>
+            <input type="date" className="input w-36" aria-label="Tanggal akhir"
+                   value={dateTo} onChange={(e) => { setDateTo(e.target.value); setPage(1); }} />
+
+            {tab === "all" && (
+              <select className="input w-44" aria-label="Filter status order"
+                      value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}>
+                <option value="">Semua Status</option>
+                {Object.entries(APPROVAL_STATUS_MAP).map(([v, m]) => (
+                  <option key={v} value={v}>{m.label}</option>
+                ))}
+              </select>
+            )}
+
+            {hasFilters && (
+              <button className="btn-ghost btn-sm text-slate-400" onClick={resetFilters}>
+                <Icon name="x-mark" className="w-3.5 h-3.5" /> Reset
+              </button>
+            )}
+
+            <div className="ml-auto flex items-center gap-2">
+              <button
+                className="btn-ghost btn-sm text-slate-400"
+                onClick={() => qc.invalidateQueries({ queryKey: ["orders"] })}
+                aria-label="Muat ulang data"
+              >
+                <Icon name="arrow-path" className={`w-3.5 h-3.5 ${isFetching ? "animate-spin" : ""}`} />
+                Refresh
+              </button>
+              {dataUpdatedAt > 0 && (
+                <span className="text-xs text-slate-400">
+                  Diperbarui {new Date(dataUpdatedAt).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })}
+                </span>
+              )}
+              <span className="text-xs text-slate-400 tabular-nums">
+                {pagination ? `${pagination.total.toLocaleString("id-ID")} order` : ""}
+              </span>
+            </div>
+          </div>
+
+          {/* ── Table ── */}
+          {isLoading ? (
+            <SkeletonTable rows={8} cols={9} />
+          ) : isError ? (
+            <div className="table-container">
+              <EmptyState icon="exclamation-triangle"
+                          title="Data order tidak dapat dimuat"
+                          description="Silakan coba beberapa saat lagi." />
+            </div>
           ) : (
             <div className="table-container">
               <table className="table">
                 <thead>
                   <tr>
+                    <th>No. Order</th>
                     <th>Tanggal</th>
-                    <th>Salesman</th>
                     <th>Toko</th>
-                    <th className="text-right">Total Order</th>
-                    <th>EC</th>
-                    <th>Durasi</th>
+                    <th>Produk / SKU</th>
+                    <th className="text-right">Qty</th>
+                    <th className="text-right">Nilai</th>
                     <th>Status</th>
+                    <th>Sumber</th>
                     <th />
                   </tr>
                 </thead>
                 <tbody>
-                  {visits.length === 0 ? (
+                  {rows.length === 0 ? (
                     <tr>
-                      <td colSpan={8}>
+                      <td colSpan={9}>
                         <EmptyState
-                          icon={tab === "waiting" ? "check-circle" : "list-bullet"}
-                          title={tab === "waiting" ? "Tidak ada kunjungan menunggu persetujuan" : "Tidak ada data kunjungan"}
+                          icon="list-bullet"
+                          title="Tidak ada order untuk filter yang dipilih."
                           description={hasFilters ? "Coba ubah atau hapus filter yang aktif." : undefined}
                         />
                       </td>
                     </tr>
                   ) : (
-                    visits.map((v: Visit) => (
-                      <tr
-                        key={v.visit_id}
-                        className="cursor-pointer group"
-                        tabIndex={0}
-                        role="link"
-                        aria-label={`Detail kunjungan ${v.store_name ?? v.outlet_sk ?? ""} — ${v.visit_date}`}
-                        onClick={() => navigate(`/visits/${v.visit_id}`)}
-                        onKeyDown={(e) => { if (e.key === "Enter") navigate(`/visits/${v.visit_id}`); }}
-                      >
-                        <td className="text-slate-500 tabular-nums">{v.visit_date}</td>
-                        <td className="font-medium text-slate-800">
-                          {v.salesman_name ?? v.salesman_sk}
+                    rows.map((o) => (
+                      <tr key={`${o.source}:${o.order_id}`}
+                          className="cursor-pointer group"
+                          tabIndex={0}
+                          role="button"
+                          aria-label={`Detail order ${o.order_number ?? o.order_id}`}
+                          onClick={() => openOrder(o)}
+                          onKeyDown={(e) => { if (e.key === "Enter") openOrder(o); }}>
+                        <td className="font-medium text-slate-800 max-w-[160px] truncate">
+                          {o.order_number ?? o.order_id}
                         </td>
-                        <td className="text-slate-600 max-w-[200px] truncate">
-                          {v.store_name ?? v.outlet_sk ?? "—"}
+                        <td className="text-slate-500 tabular-nums whitespace-nowrap">{formatDate(o.order_date)}</td>
+                        <td className="text-slate-600 max-w-[180px] truncate">
+                          {o.store_name ?? o.store_id ?? "—"}
                         </td>
-                        <td className="text-right font-medium text-slate-700 tabular-nums">
-                          {v.total_demand != null
-                            ? `Rp ${v.total_demand.toLocaleString("id-ID")}`
-                            : "—"}
+                        <td className="text-slate-600 max-w-[180px] truncate">
+                          {o.product_summary ?? "—"}
                         </td>
-                        <td>
-                          {v.effective_call === "YES" ? (
-                            <span className="badge-green">Efektif</span>
-                          ) : v.effective_call === "NO" ? (
-                            <span className="badge-gray">Tidak</span>
-                          ) : (
-                            <span className="text-slate-300">—</span>
-                          )}
+                        <td className="text-right text-slate-500 tabular-nums">{num(o.quantity)}</td>
+                        <td className="text-right font-medium text-slate-700 tabular-nums whitespace-nowrap">
+                          {rp(o.order_value)}
                         </td>
-                        <td className="text-slate-500 tabular-nums">
-                          {v.duration_minutes != null ? `${v.duration_minutes} mnt` : "—"}
-                        </td>
-                        <td>
-                          <ApprovalBadge status={v.approval_status} />
-                        </td>
+                        <td><StatusBadge status={o.status} /></td>
+                        <td><SourceBadge source={o.source} label={o.source_label} /></td>
                         <td>
                           <Icon name="chevron-right" className="w-4 h-4 text-slate-300 group-hover:text-primary-600" />
                         </td>
@@ -241,36 +378,93 @@ export default function Visits() {
           )}
 
           {/* ── Pagination ── */}
-          {data && data.total > 50 && (
+          {pagination && pagination.total > PAGE_SIZE && (
             <nav className="pagination" aria-label="Navigasi halaman">
-              <span>{data.total.toLocaleString()} kunjungan total</span>
+              <span>{pagination.total.toLocaleString("id-ID")} order total</span>
               <div className="flex items-center gap-2">
-                <button
-                  className="pagination-btn"
-                  disabled={page === 1}
-                  onClick={() => setPage((p) => p - 1)}
-                  aria-label="Halaman sebelumnya"
-                >
-                  <Icon name="chevron-left" className="w-4 h-4" aria-hidden={true} />
-                  Sebelumnya
+                <button className="pagination-btn" disabled={page === 1}
+                        onClick={() => setPage((p) => p - 1)} aria-label="Halaman sebelumnya">
+                  <Icon name="chevron-left" className="w-4 h-4" aria-hidden={true} /> Sebelumnya
                 </button>
                 <span className="text-xs text-slate-500 tabular-nums" aria-live="polite" aria-atomic="true">
-                  Hal. {page} / {totalPages}
+                  Hal. {pagination.page} / {Math.max(pagination.total_pages, 1)}
                 </span>
-                <button
-                  className="pagination-btn"
-                  disabled={!data.has_next}
-                  onClick={() => setPage((p) => p + 1)}
-                  aria-label="Halaman berikutnya"
-                >
-                  Berikutnya
-                  <Icon name="chevron-right" className="w-4 h-4" aria-hidden={true} />
+                <button className="pagination-btn" disabled={!pagination.has_next}
+                        onClick={() => setPage((p) => p + 1)} aria-label="Halaman berikutnya">
+                  Berikutnya <Icon name="chevron-right" className="w-4 h-4" aria-hidden={true} />
                 </button>
               </div>
             </nav>
           )}
         </div>
       </main>
+
+      {/* ── Spreadsheet order detail (SFA keeps its own full page) ── */}
+      <Modal open={!!openRow} onClose={() => setOpenRow(null)} title="Detail Order" maxWidth="2xl">
+        {detailLoading || !detail?.order ? (
+          <SkeletonTable rows={4} cols={4} />
+        ) : (
+          <div className="space-y-5">
+            <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
+              <div><dt className="kpi-tile-label">No. Order</dt>
+                   <dd className="font-medium text-slate-800 break-all">{detail.order.order_number ?? "—"}</dd></div>
+              <div><dt className="kpi-tile-label">Tanggal</dt>
+                   <dd className="font-medium text-slate-800">{formatDate(detail.order.order_date)}</dd></div>
+              <div><dt className="kpi-tile-label">Toko</dt>
+                   <dd className="font-medium text-slate-800">{detail.order.store_name ?? detail.order.store_id ?? "—"}</dd></div>
+              <div><dt className="kpi-tile-label">Distributor</dt>
+                   <dd className="font-medium text-slate-800">
+                     {detail.order.distributor_name ?? detail.order.distributor_code ?? "—"}
+                   </dd></div>
+              <div><dt className="kpi-tile-label">Status</dt><dd><StatusBadge status={detail.order.status} /></dd></div>
+              <div><dt className="kpi-tile-label">Sumber</dt>
+                   <dd><SourceBadge source={detail.order.source} label={detail.order.source_label} /></dd></div>
+            </dl>
+
+            <div>
+              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Produk</p>
+              <div className="table-container">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Produk</th><th>SKU</th>
+                      <th className="text-right">Qty</th>
+                      <th className="text-right">Harga</th>
+                      <th className="text-right">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {detail.items.length === 0 ? (
+                      <tr><td colSpan={5} className="text-center text-slate-400 text-sm py-6">
+                        Tidak ada rincian produk untuk order ini.
+                      </td></tr>
+                    ) : detail.items.map((it, i) => (
+                      <tr key={`${it.order_id}:${it.sku ?? i}`}>
+                        <td className="text-slate-700">{it.product_name ?? "—"}</td>
+                        <td className="text-slate-500">{it.sku ?? "—"}</td>
+                        <td className="text-right tabular-nums text-slate-600">{num(it.quantity)}</td>
+                        <td className="text-right tabular-nums text-slate-600">{rp(it.unit_price)}</td>
+                        <td className="text-right tabular-nums font-medium text-slate-700">{rp(it.line_value)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-8 text-sm border-t border-slate-100 pt-3">
+              <div className="text-right">
+                <p className="kpi-tile-label">Total Qty</p>
+                <p className="font-semibold text-slate-800 tabular-nums">{num(detail.order.quantity)}</p>
+              </div>
+              <div className="text-right">
+                <p className="kpi-tile-label">Total Nilai</p>
+                <p className="font-semibold text-slate-800 tabular-nums">{rp(detail.order.order_value)}</p>
+              </div>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }
