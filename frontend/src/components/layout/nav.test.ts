@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { NAV_TREE, canSee, isGroup, groupIsActive, type NavGroup } from "./nav";
+import { NAV_TREE, canSee, isGroup, groupIsActive, allowedPathsFor,
+         canAccessPath, defaultPathFor, visibleNavFor, type NavGroup } from "./nav";
 import type { Role } from "@/types";
 
 const ALL_ROLES: Role[] = ["salesman", "spv", "asm", "dm", "ho_admin", "demo"];
@@ -30,26 +31,40 @@ describe("navigation RBAC matrix", () => {
     expect(topLevelLabelsFor("ho_admin")).toContain("Import & Export");
   });
 
-  it("keeps Master Data PJP/Salesman out of the SPV's reach", () => {
+  it("keeps Master Data PJP/Salesman out of the SPV's and Distributor's reach", () => {
+    // dm was removed here deliberately: a Distributor's menu is restricted to
+    // Visit & Order, Approvals, Import & Export, Announcements, Notifications.
     const md = NAV_TREE.find((i) => isGroup(i) && i.id === "master-data") as NavGroup;
     for (const to of ["/master-data-pjp", "/master-data-salesman"]) {
       const leaf = md.children.find((c) => c.to === to)!;
       expect(leaf.roles).not.toContain("spv");
-      expect(leaf.roles).toEqual(expect.arrayContaining(["asm", "dm", "ho_admin"]));
+      expect(leaf.roles).not.toContain("dm");
+      expect(leaf.roles).toEqual(expect.arrayContaining(["asm", "ho_admin"]));
     }
   });
 
-  it("shows Transaction History only to dm and ho_admin", () => {
-    // External (non-SFA) transaction source: distributor-scoped by design, so an
-    // spv/asm must not even see the entry. Backend enforcement is independent
-    // (routers/ext_transaction require_role) — this guards the menu half.
-    const reports = NAV_TREE.find((i) => isGroup(i) && i.id === "reports") as NavGroup;
-    const leaf = reports.children.find((c) => c.to === "/transaction-history")!;
-    expect(leaf).toBeDefined();
-    expect(leaf.roles).toEqual(expect.arrayContaining(["dm", "ho_admin"]));
-    expect(leaf.roles).not.toContain("spv");
-    expect(leaf.roles).not.toContain("asm");
-    expect(leaf.roles).not.toContain("salesman");
+  it("Distributor (dm) sees EXACTLY the five allowed destinations", () => {
+    // Spec: Visit & Order, Approvals, Import & Export, Announcements, Notifications.
+    expect(allowedPathsFor("dm").sort()).toEqual(
+      ["/announcements", "/approvals", "/import-export", "/notifications", "/visits"],
+    );
+  });
+
+  it("Distributor cannot reach any unrelated destination", () => {
+    for (const p of ["/dashboard", "/master-data-pjp", "/master-data-salesman",
+                     "/route-planner", "/target-management", "/outlet-salesman",
+                     "/route-evaluate", "/store-opportunity", "/store360",
+                     "/salesman360", "/administration"]) {
+      expect(canAccessPath("dm", p)).toBe(false);
+    }
+  });
+
+  it("Distributor sees no group wrapper — Visit & Order is promoted to top level", () => {
+    const items = visibleNavFor("dm");
+    expect(items.every((i) => !isGroup(i))).toBe(true);
+    expect(items.map((i) => i.label)).toContain("Visit & Order");
+    expect(items.map((i) => i.label)).not.toContain("Reports");
+    expect(items.map((i) => i.label)).not.toContain("Master Data");
   });
 
   it("every leaf grants at least one role and only known roles", () => {
@@ -97,5 +112,51 @@ describe("groupIsActive", () => {
 
   it("does not match a path that only shares a string prefix (guards against startsWith bug)", () => {
     expect(groupIsActive(md, "/route-plannerX")).toBe(false);
+  });
+});
+
+describe("route-level access control", () => {
+  it("other roles keep their existing access (no regression)", () => {
+    expect(canAccessPath("ho_admin", "/administration")).toBe(true);
+    expect(canAccessPath("spv", "/dashboard")).toBe(true);
+    expect(canAccessPath("asm", "/master-data-pjp")).toBe(true);
+    expect(canAccessPath("spv", "/visits")).toBe(true);
+    expect(canAccessPath("asm", "/store360")).toBe(true);
+  });
+
+  it("non-admin roles still cannot reach Administration", () => {
+    for (const r of ["spv", "asm", "dm"] as const) {
+      expect(canAccessPath(r, "/administration")).toBe(false);
+    }
+  });
+
+  it("nested child routes are covered by their parent path", () => {
+    expect(canAccessPath("dm", "/visits/abc-123")).toBe(true);
+    expect(canAccessPath("spv", "/visits/abc-123")).toBe(true);
+  });
+
+  it("a mere string prefix is NOT access (guards against startsWith bug)", () => {
+    expect(canAccessPath("dm", "/visitsX")).toBe(false);
+    expect(canAccessPath("dm", "/visits-secret")).toBe(false);
+  });
+
+  it("landing route is role-appropriate, never a page the role cannot open", () => {
+    for (const r of ["spv", "asm", "dm", "ho_admin"] as const) {
+      const home = defaultPathFor(r);
+      expect(home).toBeTruthy();
+      expect(canAccessPath(r, home as string)).toBe(true);
+    }
+    expect(defaultPathFor("dm")).toBe("/visits");
+  });
+
+  it("mobile-only roles get no web landing route", () => {
+    expect(defaultPathFor("salesman")).toBeNull();
+    expect(defaultPathFor("demo")).toBeNull();
+  });
+
+  it("the retired Transaction History route is gone for everyone", () => {
+    for (const r of ["spv", "asm", "dm", "ho_admin"] as const) {
+      expect(canAccessPath(r, "/transaction-history")).toBe(false);
+    }
   });
 });

@@ -370,3 +370,59 @@ export interface Notification {
   deep_link: string | null;
   created_at: string;
 }
+
+// ── Unified multi-source orders (Visit & Order) ───────────────────────────────
+// SFA and the spreadsheet mirror normalized into one shape. `source` is always
+// present so the table can label provenance without opening the detail view.
+export type OrderSource = "SFA" | "SPREADSHEET";
+
+export interface OrderRow {
+  source: OrderSource;
+  source_label: string;
+  order_id: string;
+  order_number: string | null;
+  order_date: string | null;
+  store_id: string | null;
+  store_name: string | null;
+  distributor_code: string | null;
+  distributor_name: string | null;
+  salesman_name: string | null;
+  item_count: number;
+  product_summary: string | null;
+  quantity: number | null;
+  order_value: number | null;
+  status: string | null;
+}
+
+export interface OrderItemRow {
+  source: OrderSource;
+  order_id: string;
+  order_number: string | null;
+  sku: string | null;
+  product_name: string | null;
+  quantity: number | null;
+  unit_price: number | null;
+  line_value: number | null;
+}
+
+export interface OrderSourceStatus {
+  source: OrderSource;
+  label: string;
+  ok: boolean;
+  count: number;
+  error: string | null;
+}
+
+export interface OrderListResponse {
+  data: OrderRow[];
+  pagination: { page: number; page_size: number; total: number; total_pages: number; has_next: boolean };
+  summary: {
+    total_orders: number;
+    pending_orders: number;
+    completed_orders: number;
+    total_quantity: number;
+    total_value: number;
+  };
+  sources: OrderSourceStatus[];
+  truncated: boolean;
+}

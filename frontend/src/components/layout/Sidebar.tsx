@@ -6,7 +6,7 @@ import { Icon } from "@/components/ui";
 import { StepLogo } from "@/components/brand/StepLogo";
 import type { Notification, Role } from "@/types";
 import { fetchNotifications } from "@/api/notifications";
-import { NAV_TREE, isGroup, canSee, groupIsActive } from "./nav";
+import { NAV_TREE, isGroup, groupIsActive, visibleNavFor } from "./nav";
 
 // ── Sidebar ───────────────────────────────────────────────────────────────────
 export default function Sidebar() {
@@ -75,11 +75,11 @@ export default function Sidebar() {
 
       {/* ── Navigation ── */}
       <nav className="flex-1 px-3 py-4 overflow-y-auto space-y-0.5" aria-label="Main navigation">
-        {NAV_TREE.filter((item) => canSee(item, role)).map((item) => {
+        {visibleNavFor(role).map((item) => {
           if (isGroup(item)) {
             const open    = openGroups.has(item.id);
             const active  = groupIsActive(item, location.pathname);
-            const visible = item.children.filter((c) => c.roles.includes(role));
+            const visible = item.children; // already role-filtered by visibleNavFor
 
             return (
               <div key={item.id}>

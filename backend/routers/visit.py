@@ -745,10 +745,16 @@ def list_visits(
         visit_conditions.append("AND v.salesman_sk = @self_sk")
         params.append(bq.p("self_sk", "STRING", current_user.salesman_sk or current_user.user_id))
     elif role == "dm":
-        # DM sees only visits from their distributor's outlets
+        # DM sees only visits from their distributor's outlets.
+        # FAIL CLOSED: a dm whose account carries no distributor_code previously
+        # fell through this branch with NO distributor predicate at all, so it saw
+        # every distributor's visits. Deny instead — an unscoped distributor
+        # account must not become an all-distributor account.
         if current_user.distributor_code:
             visit_conditions.append("AND o.distributor_code = @dist_code")
             params.append(bq.p("dist_code", "STRING", current_user.distributor_code))
+        else:
+            visit_conditions.append("AND 1=0")
         # DM sees visits that need their action or are already completed
         visit_conditions.append("AND v.approval_status IN ('SPV_APPROVED','COMPLETED')")
     elif role == "spv":
