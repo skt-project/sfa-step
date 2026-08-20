@@ -37,8 +37,22 @@ def _order(**kw):
 
 def test_dm_is_pinned_to_its_own_distributor():
     clause, params = distributor_predicate(_user("dm", "DST157"), "o.distributor_code", "d")
-    assert "o.distributor_code = @d" in clause
+    assert "o.distributor_code IN (@d_0)" in clause
     assert params[0].value == "DST157"
+
+
+def test_dm_with_multiple_comma_separated_codes_sees_all_of_them():
+    """A dm claim accepts a comma-separated list — e.g. a roaming/test account
+    covering more than one distributor. A single code is just a one-element list,
+    so this is fully backward compatible with every real (single-code) account."""
+    clause, params = distributor_predicate(_user("dm", "DST157,DST105"), "o.distributor_code", "d")
+    assert clause == "AND o.distributor_code IN (@d_0, @d_1)"
+    assert [p.value for p in params] == ["DST157", "DST105"]
+
+
+def test_dm_multi_code_list_tolerates_stray_whitespace():
+    clause, params = distributor_predicate(_user("dm", "DST157, DST105 ,"), "o.distributor_code", "d")
+    assert [p.value for p in params] == ["DST157", "DST105"]
 
 
 def test_dm_without_a_distributor_code_sees_nothing():
