@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import TopNav from "@/components/layout/TopNav";
 import { Icon, SkeletonTable, SkeletonStatCards, EmptyState, Modal } from "@/components/ui";
-import { listOrders, getOrderDetail, exportOrders, type OrderFilters } from "@/api/orders";
+import { listOrders, getOrderDetail, exportOrders, exportSingleOrder, type OrderFilters } from "@/api/orders";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useAuthStore } from "@/store/authStore";
 import { toast } from "@/store/toastStore";
@@ -75,23 +75,26 @@ export default function Visits() {
   const [page,        setPage]        = useState(1);
   const [openRow,     setOpenRow]     = useState<OrderRow | null>(null);
   const [exporting,   setExporting]   = useState(false);
+  const [rowExporting, setRowExporting] = useState(false);
 
   const dStore  = useDebounce(storeSearch, 350);
   const dSku    = useDebounce(skuSearch, 350);
   const dSearch = useDebounce(search, 350);
 
-  // Role-aware default queue, preserved from the previous implementation: a
-  // Distributor's actionable queue is SPV-approved orders, not PENDING_SPV.
+  // Distributor accounts have no "waiting" queue tab: a dm's orders arrive
+  // already SPV_APPROVED/COMPLETED, and defaulting to a narrow status filter
+  // produced a page that looked broken whenever nothing matched it (indistinguishable
+  // from an actual failure). Distributors always see everything, filterable manually.
   const role          = useAuthStore((s) => s.user?.role);
   const isDistributor = role === "dm";
-  const waitingLabel  = isDistributor ? "Menunggu Distributor" : "Menunggu SPV";
-  const waitingStatus = isDistributor ? "SPV_APPROVED" : "PENDING_SPV";
   const tabs: { key: TabKey; label: string }[] = [
-    { key: "waiting", label: waitingLabel },
+    { key: "waiting", label: "Menunggu SPV" },
     { key: "all",     label: "Semua Order" },
   ];
 
-  const activeStatus = tab === "waiting" && !statusFilter ? waitingStatus : statusFilter || undefined;
+  const activeStatus = !isDistributor && tab === "waiting" && !statusFilter
+    ? "PENDING_SPV"
+    : statusFilter || undefined;
 
   const filters: OrderFilters = {
     from_date:    dateFrom || undefined,
@@ -150,6 +153,19 @@ export default function Visits() {
     }
   };
 
+  const handleRowExport = async () => {
+    if (!openRow) return;
+    setRowExporting(true);
+    try {
+      await exportSingleOrder(openRow.source, openRow.order_id);
+      toast.success("Excel berhasil diunduh.");
+    } catch {
+      toast.error("Gagal mengunduh Excel. Silakan coba lagi.");
+    } finally {
+      setRowExporting(false);
+    }
+  };
+
   const tiles = [
     { label: "Total Order",  value: summary ? summary.total_orders.toLocaleString("id-ID") : "—",     icon: "clipboard-document-list" as const, cls: "icon-badge-blue"   },
     { label: "Pending",      value: summary ? summary.pending_orders.toLocaleString("id-ID") : "—",   icon: "clock"                   as const, cls: "icon-badge-amber"  },
@@ -176,20 +192,22 @@ export default function Visits() {
       />
 
       <main className="flex-1 overflow-y-auto">
-        {/* ── Tabs ── */}
-        <div className="tabs px-6" role="tablist" aria-label="Filter order">
-          {tabs.map(({ key, label }) => (
-            <button
-              key={key}
-              role="tab"
-              aria-selected={tab === key}
-              onClick={() => { setTab(key); setStatusFilter(""); setPage(1); }}
-              className={`tab ${tab === key ? "tab-active" : ""}`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+        {/* ── Tabs (spv/asm/ho_admin only — a Distributor always sees everything) ── */}
+        {!isDistributor && (
+          <div className="tabs px-6" role="tablist" aria-label="Filter order">
+            {tabs.map(({ key, label }) => (
+              <button
+                key={key}
+                role="tab"
+                aria-selected={tab === key}
+                onClick={() => { setTab(key); setStatusFilter(""); setPage(1); }}
+                className={`tab ${tab === key ? "tab-active" : ""}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
 
         <div className="p-6 space-y-5">
           {/* ── Per-source failures: one source down never hides the others ── */}
@@ -269,7 +287,7 @@ export default function Visits() {
             <input type="date" className="input w-36" aria-label="Tanggal akhir"
                    value={dateTo} onChange={(e) => { setDateTo(e.target.value); setPage(1); }} />
 
-            {tab === "all" && (
+            {(isDistributor || tab === "all") && (
               <select className="input w-44" aria-label="Filter status order"
                       value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}>
                 <option value="">Semua Status</option>
@@ -400,7 +418,23 @@ export default function Visits() {
       </main>
 
       {/* ── Spreadsheet order detail (SFA keeps its own full page) ── */}
-      <Modal open={!!openRow} onClose={() => setOpenRow(null)} title="Detail Order" maxWidth="2xl">
+      <Modal
+        open={!!openRow}
+        onClose={() => setOpenRow(null)}
+        title="Detail Order"
+        maxWidth="2xl"
+        footer={
+          <button
+            className="btn-secondary btn-sm"
+            onClick={handleRowExport}
+            disabled={rowExporting || detailLoading || !detail?.order}
+          >
+            <Icon name={rowExporting ? "arrow-path" : "arrow-down-tray"}
+                  className={`w-4 h-4 ${rowExporting ? "animate-spin" : ""}`} />
+            {rowExporting ? "Menyiapkan..." : "Export Excel"}
+          </button>
+        }
+      >
         {detailLoading || !detail?.order ? (
           <SkeletonTable rows={4} cols={4} />
         ) : (

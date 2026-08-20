@@ -6,6 +6,7 @@ import { Icon, Skeleton, EmptyState } from "@/components/ui";
 import Modal from "@/components/ui/Modal";
 import { toast } from "@/store/toastStore";
 import { getVisit, approveVisit, rejectVisit, updateFinalQty, updateStorePrice, updateAdjustment, downloadVisitPdf } from "@/api/visit";
+import { exportSingleOrder } from "@/api/orders";
 import { useAuthStore } from "@/store/authStore";
 import type { Visit, VisitApprovalStatus, VisitItem } from "@/types";
 
@@ -128,6 +129,7 @@ export default function VisitDetail() {
   const [rejectNotes, setRejectNotes] = useState("");
   const rejectBtnRef = useRef<HTMLButtonElement>(null);
   const [pdfLoading,  setPdfLoading]  = useState(false);
+  const [xlsxLoading, setXlsxLoading] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
 
   const [finalQtyMap,  setFinalQtyMap]  = useState<Record<string, number>>({});
@@ -246,6 +248,18 @@ export default function VisitDetail() {
       datePart = d && m && y ? `${d}${m}${y}` : visit.visit_date.replace(/-/g, "");
     }
     return `${store}_${datePart}.pdf`;
+  };
+
+  const handleExcelDownload = async () => {
+    setXlsxLoading(true);
+    try {
+      await exportSingleOrder("SFA", visitId!);
+      toast.success("Excel berhasil diunduh.");
+    } catch {
+      toast.error("Gagal mengunduh Excel. Coba lagi.");
+    } finally {
+      setXlsxLoading(false);
+    }
   };
 
   const handlePdfDownload = async () => {
@@ -378,6 +392,18 @@ export default function VisitDetail() {
         subtitle={visit.store_name ?? visit.outlet_sk ?? undefined}
         actions={
           <div className="flex items-center gap-2">
+            {canDownloadPdf && (
+              <button
+                className="btn-secondary btn-sm"
+                onClick={handleExcelDownload}
+                disabled={xlsxLoading}
+              >
+                {xlsxLoading
+                  ? <Icon name="arrow-path" className="w-4 h-4 animate-spin" />
+                  : <Icon name="arrow-down-tray" className="w-4 h-4" />}
+                {xlsxLoading ? "Mengunduh…" : "Export Excel"}
+              </button>
+            )}
             {canDownloadPdf && (
               <button
                 className="btn-secondary btn-sm"
