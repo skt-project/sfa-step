@@ -65,7 +65,11 @@ def distributor_predicate(user: UserContext, column: str, param: str) -> tuple[s
     """Distributor scoping shared by both sources.
 
     ho_admin / spv / asm → unrestricted here (require_role governs who may call).
-    dm                   → pinned to their own distributor_code from the token.
+    dm                   → pinned to their own distributor_code(s) from the token.
+                           A dm normally represents exactly one distributor, but the
+                           claim accepts a comma-separated list (e.g. a test/roaming
+                           account covering more than one) — a single code is just a
+                           one-element list, so this is fully backward compatible.
     dm with no code      → NOTHING (fail closed). An unscoped distributor account
                            must never silently become an all-distributor account.
     """
@@ -73,9 +77,12 @@ def distributor_predicate(user: UserContext, column: str, param: str) -> tuple[s
 
     if user.role != "dm":
         return "", []
-    if not user.distributor_code:
+    codes = [c.strip() for c in (user.distributor_code or "").split(",") if c.strip()]
+    if not codes:
         return "AND 1=0", []
-    return f"AND {column} = @{param}", [BQClient.p(param, "STRING", user.distributor_code)]
+    placeholders = ", ".join(f"@{param}_{i}" for i in range(len(codes)))
+    params = [BQClient.p(f"{param}_{i}", "STRING", c) for i, c in enumerate(codes)]
+    return f"AND {column} IN ({placeholders})", params
 
 
 def role_scope(user: UserContext, visit_alias: str, salesman_col: str) -> tuple[list[str], list]:
