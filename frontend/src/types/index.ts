@@ -390,8 +390,10 @@ export interface OrderRow {
   item_count: number;
   product_summary: string | null;
   quantity: number | null;
-  order_value: number | null;
+  order_value: number | null;   // UNADJUSTED — matches SFA's total_demand convention
   status: string | null;
+  adjustment_amount: number | null;
+  adjustment_note: string | null;
 }
 
 export interface OrderItemRow {

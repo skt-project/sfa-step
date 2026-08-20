@@ -29,6 +29,20 @@ export const getOrderDetail = (source: string, order_id: string) =>
     })
     .then((r) => r.data);
 
+/** Distributor Admin invoice adjustment for a Spreadsheet order — the same
+ *  capability SFA orders already have. SFA orders keep using their own existing
+ *  updateAdjustment() in api/visit.ts; this is Spreadsheet-only. */
+export const updateOrderAdjustment = (
+  order_id: string,
+  adjustment_amount: number,
+  adjustment_note: string | null,
+) =>
+  api
+    .put<{ order: OrderRow }>("/orders/adjustment", {
+      source: "SPREADSHEET", order_id, adjustment_amount, adjustment_note,
+    })
+    .then((r) => r.data);
+
 async function downloadBlob(url: string, params: object, fallbackName: string) {
   const res = await api.get(url, { params, responseType: "blob" });
   const disposition = String(res.headers["content-disposition"] ?? "");

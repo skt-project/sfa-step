@@ -1,9 +1,9 @@
-import { useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import TopNav from "@/components/layout/TopNav";
 import { Icon, SkeletonTable, SkeletonStatCards, EmptyState, Modal } from "@/components/ui";
-import { listOrders, getOrderDetail, exportOrders, exportSingleOrder, type OrderFilters } from "@/api/orders";
+import { listOrders, getOrderDetail, exportOrders, exportSingleOrder, updateOrderAdjustment, type OrderFilters } from "@/api/orders";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useAuthStore } from "@/store/authStore";
 import { toast } from "@/store/toastStore";
@@ -76,6 +76,9 @@ export default function Visits() {
   const [openRow,     setOpenRow]     = useState<OrderRow | null>(null);
   const [exporting,   setExporting]   = useState(false);
   const [rowExporting, setRowExporting] = useState(false);
+  const [adjEditing,  setAdjEditing]  = useState(false);
+  const [adjAmount,   setAdjAmount]   = useState(0);
+  const [adjNote,     setAdjNote]     = useState("");
 
   const dStore  = useDebounce(storeSearch, 350);
   const dSku    = useDebounce(skuSearch, 350);
@@ -130,6 +133,28 @@ export default function Visits() {
     queryKey: ["order-detail", openRow?.source, openRow?.order_id],
     queryFn: () => getOrderDetail(openRow!.source, openRow!.order_id),
     enabled: !!openRow,
+  });
+
+  // Same capability SFA orders already have (PUT /visit/{id}/adjustment) —
+  // extended to Spreadsheet orders. Only the header-level adjustment is
+  // editable; the synced quantities/prices stay a read-only mirror of the source.
+  const isDistAdm = role === "dm" || role === "ho_admin";
+
+  useEffect(() => {
+    setAdjEditing(false);
+    setAdjAmount(detail?.order?.adjustment_amount ?? 0);
+    setAdjNote(detail?.order?.adjustment_note ?? "");
+  }, [detail?.order?.order_id, detail?.order?.adjustment_amount, detail?.order?.adjustment_note]);
+
+  const adjustMut = useMutation({
+    mutationFn: () => updateOrderAdjustment(openRow!.order_id, adjAmount, adjNote.trim() || null),
+    onSuccess: () => {
+      setAdjEditing(false);
+      qc.invalidateQueries({ queryKey: ["order-detail", "SPREADSHEET", openRow?.order_id] });
+      qc.invalidateQueries({ queryKey: ["orders"] });
+      toast.success("Penyesuaian tersimpan.");
+    },
+    onError: () => toast.error("Gagal menyimpan penyesuaian. Coba lagi."),
   });
 
   const openOrder = (o: OrderRow) => {
@@ -486,6 +511,82 @@ export default function Visits() {
               </div>
             </div>
 
+            {/* ── Distributor Admin invoice adjustment — same capability SFA
+                   orders already have, extended to Spreadsheet orders. Only the
+                   header-level adjustment is editable; synced quantities/prices
+                   stay a read-only mirror of the source spreadsheet. ── */}
+            {isDistAdm && (
+              <div className="border-t border-slate-100 pt-3">
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
+                    Penyesuaian Invoice
+                  </p>
+                  {!adjEditing && (
+                    <button className="btn-secondary btn-sm" onClick={() => setAdjEditing(true)}>
+                      <Icon name="pencil" className="w-3.5 h-3.5" />
+                      {(detail.order.adjustment_amount ?? 0) !== 0 ? "Ubah" : "Tambah"}
+                    </button>
+                  )}
+                </div>
+
+                {adjEditing ? (
+                  <div className="space-y-2">
+                    <div>
+                      <label className="text-xs text-slate-500 mb-1 block">
+                        Nominal penyesuaian (Rp) — gunakan minus untuk pengurangan
+                      </label>
+                      <input
+                        type="number" className="input text-sm tabular-nums w-full"
+                        value={adjAmount || ""} placeholder="0" aria-label="Nominal penyesuaian"
+                        onChange={(e) => setAdjAmount(parseFloat(e.target.value) || 0)}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs text-slate-500 mb-1 block">Keterangan</label>
+                      <input
+                        type="text" className="input text-sm w-full" value={adjNote}
+                        placeholder="mis. Ongkos kirim / Diskon promo" aria-label="Keterangan penyesuaian"
+                        onChange={(e) => setAdjNote(e.target.value)}
+                      />
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        className="btn-primary btn-sm flex-1"
+                        disabled={adjustMut.isPending}
+                        onClick={() => adjustMut.mutate()}
+                      >
+                        {adjustMut.isPending ? "Menyimpan..." : "Simpan"}
+                      </button>
+                      <button
+                        className="btn-secondary btn-sm flex-1"
+                        onClick={() => {
+                          setAdjEditing(false);
+                          setAdjAmount(detail?.order?.adjustment_amount ?? 0);
+                          setAdjNote(detail?.order?.adjustment_note ?? "");
+                        }}
+                      >
+                        Batal
+                      </button>
+                    </div>
+                  </div>
+                ) : (detail.order.adjustment_amount ?? 0) !== 0 ? (
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-slate-500 truncate">
+                      {detail.order.adjustment_note || "Penyesuaian"}
+                    </span>
+                    <span className={`font-medium tabular-nums ${
+                      (detail.order.adjustment_amount ?? 0) < 0 ? "text-red-600" : "text-amber-600"
+                    }`}>
+                      {(detail.order.adjustment_amount ?? 0) > 0 ? "+ " : "− "}
+                      {rp(Math.abs(detail.order.adjustment_amount ?? 0))}
+                    </span>
+                  </div>
+                ) : (
+                  <p className="text-xs text-slate-400">Tidak ada penyesuaian.</p>
+                )}
+              </div>
+            )}
+
             <div className="flex justify-end gap-8 text-sm border-t border-slate-100 pt-3">
               <div className="text-right">
                 <p className="kpi-tile-label">Total Qty</p>
@@ -493,7 +594,9 @@ export default function Visits() {
               </div>
               <div className="text-right">
                 <p className="kpi-tile-label">Total Nilai</p>
-                <p className="font-semibold text-slate-800 tabular-nums">{rp(detail.order.order_value)}</p>
+                <p className="font-semibold text-slate-800 tabular-nums">
+                  {rp((detail.order.order_value ?? 0) + (detail.order.adjustment_amount ?? 0))}
+                </p>
               </div>
             </div>
           </div>

@@ -310,6 +310,7 @@ def fetch_sheet_orders(bq, user: UserContext, f: dict, limit: int) -> list[Order
     sql = f"""
     SELECT e.ext_visit_id, e.visit_date, e.visit_status, e.computed_value, e.computed_qty,
            e.item_count, e.store_name, e.source_store_id, e.distributor_code, e.salesman_name,
+           e.adjustment_amount, e.adjustment_note,
            (SELECT MIN(sku_name) FROM {item_tbl} i
              WHERE i.ext_visit_id = e.ext_visit_id) AS first_product
     FROM {_tbl('ext_visit')} e
@@ -342,6 +343,8 @@ def fetch_sheet_orders(bq, user: UserContext, f: dict, limit: int) -> list[Order
             quantity=r.get("computed_qty"),
             order_value=r.get("computed_value"),
             status=r.get("visit_status"),
+            adjustment_amount=r.get("adjustment_amount"),
+            adjustment_note=r.get("adjustment_note"),
         ))
     return out
 

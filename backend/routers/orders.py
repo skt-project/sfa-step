@@ -1,15 +1,20 @@
 """
 Unified multi-source orders for Visit & Order.
 
-GET /orders          — merged, filtered, paginated order list + summary + per-source status
-GET /orders/detail   — one order's line items (source-aware)
-GET /orders/export   — the SAME filtered set as an .xlsx workbook
+GET /orders            — merged, filtered, paginated order list + summary + per-source status
+GET /orders/detail     — one order's line items (source-aware)
+GET /orders/export     — the SAME filtered set as an .xlsx workbook
+GET /orders/export/{source}/{order_id} — one order as an .xlsx workbook
+PUT /orders/adjustment — Distributor Admin invoice adjustment on a Spreadsheet order
 
-ADDITIVE BY DESIGN. This router only READS. It does not modify step_visit,
-step_visit_item or any other SFA table, and routers/visit.py is untouched and
-still serves the handheld and the existing SFA flows exactly as before. The
-Google Spreadsheet feed is an ADDITIONAL source alongside SFA, never a
-replacement for it.
+ADDITIVE BY DESIGN. This router never touches step_visit, step_visit_item or any
+other SFA table, and routers/visit.py is untouched and still serves the handheld
+and the existing SFA flows exactly as before — including SFA's OWN adjustment
+route (PUT /visit/{id}/adjustment), unchanged. The one write this router performs
+is scoped to ext_visit.adjustment_amount/adjustment_note — two columns the sync
+never writes (see migration 008), so it can never race with or be undone by a
+re-sync of the source spreadsheet. The Google Spreadsheet feed is an ADDITIONAL
+source alongside SFA, never a replacement for it.
 
 SOURCE INDEPENDENCE (spec §14): each source is queried in its own try/except.
 One failing source yields an error entry in `sources[]` while the other source's
@@ -25,9 +30,11 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
+from config import settings
 from dependencies import require_role
 from models.auth import UserContext
 from models.order import (
+    AdjustmentRequest,
     OrderListResponse,
     OrderPagination,
     OrderRow,
@@ -177,6 +184,53 @@ def order_detail(
     items = (fetch_sfa_items(bq, [order_id]) if src == SOURCE_SFA
              else fetch_sheet_items(bq, [order_id]))
     return {"order": match, "items": items}
+
+
+@router.put("/adjustment")
+def update_adjustment(
+    body: AdjustmentRequest,
+    current_user: UserContext = Depends(require_role("dm", "ho_admin")),
+):
+    """Distributor Admin invoice adjustment for a Spreadsheet order — the same
+    capability SFA orders already have via PUT /visit/{id}/adjustment, extended
+    to the external source. Positive = surcharge, negative = reduction.
+
+    SFA orders are NOT accepted here: use the existing, unchanged SFA route.
+    Scoping is enforced the same way as order_detail() — the order is re-fetched
+    through the caller's own filtered query first, so a distributor can never
+    adjust another distributor's order even by guessing its id.
+    """
+    if (body.source or "").upper() != SOURCE_SHEET:
+        raise HTTPException(
+            status_code=400,
+            detail="Only Spreadsheet orders can be adjusted here — SFA orders use PUT /visit/{id}/adjustment.",
+        )
+
+    bq = BQClient.get()
+    f = _filters(None, None, None, None, None, body.order_id, None)
+    rows = fetch_sheet_orders(bq, current_user, f, MAX_MERGE)
+    if not any(r.order_id == body.order_id for r in rows):
+        raise HTTPException(status_code=404, detail="Not found")
+
+    bq.execute(
+        f"""
+        UPDATE `{settings.bq_project}.{settings.bq_dataset}.ext_visit`
+        SET adjustment_amount = @amt, adjustment_note = @note
+        WHERE ext_visit_id = @oid
+        """,
+        [
+            bq.p("amt", "FLOAT64", body.adjustment_amount),
+            bq.p("note", "STRING", body.adjustment_note),
+            bq.p("oid", "STRING", body.order_id),
+        ],
+    )
+    bq.cache.invalidate("ext_tx:")
+
+    updated = fetch_sheet_orders(bq, current_user, f, MAX_MERGE)
+    order = next((r for r in updated if r.order_id == body.order_id), None)
+    logger.info("orders/adjustment: user=%s order_id=%s amount=%s",
+                current_user.username, body.order_id, body.adjustment_amount)
+    return {"order": order}
 
 
 # ---------------------------------------------------------------------------

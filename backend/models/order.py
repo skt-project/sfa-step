@@ -29,8 +29,22 @@ class OrderRow(BaseModel):
     item_count: int = 0
     product_summary: str | None = None   # single product name, or "N produk"
     quantity: float | None = None
-    order_value: float | None = None
+    order_value: float | None = None     # UNADJUSTED — matches SFA's total_demand convention
     status: str | None = None
+
+    # Distributor Admin invoice adjustment (SPREADSHEET orders only today; SFA's
+    # equivalent lives on step_visit and is served by the existing /visit route).
+    # Kept separate from order_value rather than folded in, mirroring how SFA
+    # already displays it: grandTotal + adjustment_amount at render time.
+    adjustment_amount: float | None = None
+    adjustment_note: str | None = None
+
+
+class AdjustmentRequest(BaseModel):
+    source: str                      # today: "SPREADSHEET" only
+    order_id: str
+    adjustment_amount: float = 0.0
+    adjustment_note: str | None = None
 
 
 class OrderItemRow(BaseModel):
