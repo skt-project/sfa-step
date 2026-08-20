@@ -29,16 +29,24 @@ export const getOrderDetail = (source: string, order_id: string) =>
     })
     .then((r) => r.data);
 
-/** Download the current view as .xlsx. Sends the SAME filters as the list, so
- *  the workbook always matches what is on screen. */
-export const exportOrders = async (params: OrderFilters): Promise<void> => {
-  const res = await api.get("/orders/export", { params, responseType: "blob" });
+async function downloadBlob(url: string, params: object, fallbackName: string) {
+  const res = await api.get(url, { params, responseType: "blob" });
   const disposition = String(res.headers["content-disposition"] ?? "");
   const match = disposition.match(/filename="?([^"]+)"?/);
-  const url = window.URL.createObjectURL(new Blob([res.data]));
+  const blobUrl = window.URL.createObjectURL(new Blob([res.data]));
   const a = document.createElement("a");
-  a.href = url;
-  a.download = match?.[1] ?? "VisitOrder.xlsx";
+  a.href = blobUrl;
+  a.download = match?.[1] ?? fallbackName;
   a.click();
-  window.URL.revokeObjectURL(url);
-};
+  window.URL.revokeObjectURL(blobUrl);
+}
+
+/** Download the current view as .xlsx. Sends the SAME filters as the list, so
+ *  the workbook always matches what is on screen. */
+export const exportOrders = (params: OrderFilters): Promise<void> =>
+  downloadBlob("/orders/export", params, "VisitOrder.xlsx");
+
+/** Download a single order (both sheets: summary + items) as .xlsx. Works for
+ *  either source — same endpoint, same shape as the bulk export. */
+export const exportSingleOrder = (source: string, orderId: string): Promise<void> =>
+  downloadBlob(`/orders/export/${encodeURIComponent(source)}/${encodeURIComponent(orderId)}`, {}, `Order_${orderId}.xlsx`);

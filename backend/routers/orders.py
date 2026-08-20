@@ -22,7 +22,7 @@ import io
 import logging
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from dependencies import require_role
@@ -202,6 +202,86 @@ def _autosize(ws) -> None:
         ws.column_dimensions[get_column_letter(idx)].width = min(max(width + 2, 10), 42)
 
 
+def _write_header(ws, headers: list[str]) -> None:
+    from openpyxl.styles import Alignment, Font, PatternFill
+    ws.append(headers)
+    for cell in ws[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="1E3A8A")
+        cell.alignment = Alignment(vertical="center")
+    ws.freeze_panes = "A2"
+
+
+@router.get("/export/{source}/{order_id}")
+def export_single_order(
+    source: str,
+    order_id: str,
+    current_user: UserContext = Depends(require_role(*_ALLOWED_ROLES)),
+):
+    """Export ONE order — same two-sheet shape as the bulk export, scoped exactly
+    like order_detail(): re-fetched through the caller's own filtered query, so an
+    id outside their scope 404s rather than leaking another distributor's order."""
+    from openpyxl import Workbook
+
+    bq = BQClient.get()
+    src = (source or "").upper()
+    f = _filters(None, None, None, None, None, order_id, None)
+
+    if src == SOURCE_SFA:
+        rows = fetch_sfa_orders(bq, current_user, f, MAX_MERGE)
+    elif src == SOURCE_SHEET:
+        rows = fetch_sheet_orders(bq, current_user, f, MAX_MERGE)
+    else:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    order = next((r for r in rows if r.order_id == order_id), None)
+    if order is None:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    items = (fetch_sfa_items(bq, [order_id]) if src == SOURCE_SFA
+             else fetch_sheet_items(bq, [order_id]))
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Order Summary"
+    _write_header(ws, _SUMMARY_HEADERS)
+    ws.append([
+        order.source_label, order.order_number, order.order_date, order.store_id,
+        order.store_name, order.distributor_code, order.distributor_name,
+        order.salesman_name, order.item_count, order.quantity, order.order_value,
+        order.status,
+    ])
+    for row in ws.iter_rows(min_row=2, min_col=10, max_col=11):
+        for cell in row:
+            cell.number_format = "#,##0.##"
+    _autosize(ws)
+
+    ws2 = wb.create_sheet("Order Details")
+    _write_header(ws2, _DETAIL_HEADERS)
+    for it in items:
+        ws2.append([
+            order.source_label, it.order_number, order.order_date, order.store_id,
+            order.store_name, it.sku, it.product_name, it.quantity, it.unit_price,
+            it.line_value,
+        ])
+    for row in ws2.iter_rows(min_row=2, min_col=8, max_col=10):
+        for cell in row:
+            cell.number_format = "#,##0.##"
+    _autosize(ws2)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    filename = f"Order_{order.order_id}.xlsx"
+    logger.info("orders/export-single: user=%s source=%s order_id=%s",
+                current_user.username, source, order_id)
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @router.get("/export")
 def export_orders(
     from_date: str | None = Query(None),
@@ -221,7 +301,6 @@ def export_orders(
     row the user could not see on screen. Two sheets — one row per ORDER, then
     one row per line ITEM (SKU/product live at item level)."""
     from openpyxl import Workbook
-    from openpyxl.styles import Alignment, Font, PatternFill
 
     bq = BQClient.get()
     f = _filters(from_date, to_date, status, store, sku, order_number, search)
@@ -229,21 +308,11 @@ def export_orders(
     orders = sort_orders(orders, sort_by, sort_order)
 
     wb = Workbook()
-    head_font = Font(bold=True, color="FFFFFF")
-    head_fill = PatternFill("solid", fgColor="1E3A8A")
-
-    def write_header(ws, headers):
-        ws.append(headers)
-        for cell in ws[1]:
-            cell.font = head_font
-            cell.fill = head_fill
-            cell.alignment = Alignment(vertical="center")
-        ws.freeze_panes = "A2"
 
     # ── Sheet 1: one row per order ──
     ws = wb.active
     ws.title = "Order Summary"
-    write_header(ws, _SUMMARY_HEADERS)
+    _write_header(ws, _SUMMARY_HEADERS)
     for o in orders:
         ws.append([
             o.source_label, o.order_number, o.order_date, o.store_id, o.store_name,
@@ -257,7 +326,7 @@ def export_orders(
 
     # ── Sheet 2: one row per line item ──
     ws2 = wb.create_sheet("Order Details")
-    write_header(ws2, _DETAIL_HEADERS)
+    _write_header(ws2, _DETAIL_HEADERS)
     by_id = {o.order_id: o for o in orders}
     sfa_ids = [o.order_id for o in orders if o.source == SOURCE_SFA]
     sheet_ids = [o.order_id for o in orders if o.source == SOURCE_SHEET]
